@@ -147,7 +147,7 @@ struct LanguagesPicker: View {
     var body: some View {
         SettingRow(title: "Languages", subtitle: "Pick the languages you dictate in. Detection is per dictation.") {
             VStack(alignment: .trailing, spacing: 6) {
-                Toggle("Auto-detect", isOn: $prefs.autoDetectLanguage).toggleStyle(.checkbox).font(Fonts.ui(12))
+                Toggle("Auto-detect", isOn: $prefs.autoDetectLanguage).toggleStyle(.checkbox).font(Fonts.ui(12)).disabled(prefs.languages.count < 2)
                 Menu {
                     ForEach(LanguageCatalog.common, id: \.self) { code in
                         Button {

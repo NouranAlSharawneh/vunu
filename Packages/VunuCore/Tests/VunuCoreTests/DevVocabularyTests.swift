@@ -22,3 +22,13 @@ final class DevVocabularyTests: XCTestCase {
         XCTAssertLessThan(sw.elapsedMs / 10, 8)
     }
 }
+
+final class DevVocabularyAITests: XCTestCase {
+    func testAIAndDesignTerms() {
+        XCTAssertEqual(DevVocabulary.apply("I tried hexfields and mid journey for the hero section"), "I tried Higgsfield and Midjourney for the hero section")
+        XCTAssertEqual(DevVocabulary.apply("check dribble and morbin for a nav bar"), "check Dribbble and Mobbin for a navbar")
+        XCTAssertEqual(DevVocabulary.apply("claude fable beats gpt five and deep seek"), "Claude Fable beats GPT-5 and DeepSeek")
+        XCTAssertEqual(DevVocabulary.apply("use eleven labs for text to speech"), "use ElevenLabs for text-to-speech")
+        XCTAssertEqual(DevVocabulary.apply("a bright sonnet about the sea"), "a bright sonnet about the sea")
+    }
+}

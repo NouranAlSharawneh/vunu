@@ -345,7 +345,7 @@ public final class SessionCoordinator {
         }
 
         // 2. ASR
-        let engine = ModelManager.shared.activeEngine
+        let engine = await ModelManager.shared.bestAvailableEngine()
         let loaded = await engine.isLoaded
         if !loaded {
             show(SessionNotice(.info, "Loading speech model…", detail: "First run downloads ~600 MB. Your dictation will be transcribed as soon as it's ready.", duration: 60))
@@ -353,7 +353,8 @@ public final class SessionCoordinator {
             if notice?.title == "Loading speech model…" { notice = nil }
         }
         let asrSw = Stopwatch()
-        let hint = prefs.autoDetectLanguage ? nil : prefs.languages.first
+        // With one language selected the hint is always sent (Parakeet v3 filters non-matching scripts, e.g. no Cyrillic for English).
+        let hint = prefs.languages.count == 1 ? prefs.languages.first : (prefs.autoDetectLanguage ? nil : prefs.languages.first)
         let asr: TranscriptionResult
         do { asr = try await engine.transcribe(vad.samples, languageHint: hint) } catch {
             timings.asrMs = asrSw.elapsedMs

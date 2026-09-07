@@ -17,8 +17,8 @@ public enum SttEngineKind: String, CaseIterable, Codable, Sendable, Identifiable
     public var id: String { rawValue }
     public var title: String {
         switch self {
-        case .parakeetV3: "Parakeet v3 (multilingual, recommended)"
-        case .parakeetV2: "Parakeet v2 (English only)"
+        case .parakeetV3: "Parakeet v3 (25 languages)"
+        case .parakeetV2: "Parakeet v2 (English, most accurate)"
         case .appleSpeech: "Apple Speech (built-in)"
         case .whisperKit: "Whisper large-v3-turbo (Arabic + 90 languages)"
         }
@@ -91,7 +91,7 @@ public final class Preferences {
         muteMusicWhileDictating = d.bool(forKey: "muteMusicWhileDictating")
         hideFlowBarFromScreenShare = d.bool(forKey: "hideFlowBarFromScreenShare")
         cleanupLevel = CleanupLevel(rawValue: d.string(forKey: "cleanupLevel") ?? "") ?? .medium
-        sttEngine = SttEngineKind(rawValue: d.string(forKey: "sttEngine") ?? "") ?? .parakeetV3
+        sttEngine = SttEngineKind(rawValue: d.string(forKey: "sttEngine") ?? "") ?? .parakeetV2
         formatter = FormatterKind(rawValue: d.string(forKey: "formatter") ?? "") ?? .appleIntelligence
         keepModelsLoaded = d.object(forKey: "keepModelsLoaded") as? Bool ?? true
         audioRetention = AudioRetention(rawValue: d.string(forKey: "audioRetention") ?? "") ?? .never

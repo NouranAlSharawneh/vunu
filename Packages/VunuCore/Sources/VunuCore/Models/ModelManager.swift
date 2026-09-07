@@ -33,6 +33,14 @@ public final class ModelManager {
 
     public var activeEngine: any TranscriptionEngine { engine(for: Preferences.shared.sttEngine) }
 
+    /// The selected engine if loaded, else any loaded Parakeet engine (so a dictation never waits on a background download).
+    public func bestAvailableEngine() async -> any TranscriptionEngine {
+        let selected = activeEngine
+        if await selected.isLoaded { return selected }
+        for kind in [SttEngineKind.parakeetV2, .parakeetV3] where loadedEngines.contains(kind) { return engine(for: kind) }
+        return selected
+    }
+
     public func isDownloaded(_ kind: SttEngineKind) async -> Bool {
         switch kind {
         case .parakeetV3: await parakeetV3.isDownloaded
@@ -48,7 +56,12 @@ public final class ModelManager {
         _ = RuleFormatter().format("warm up first one, second two, at seven thirty pm, email me at a at b dot com period")
         _ = DevVocabulary.apply("warm up")
         let kind = Preferences.shared.sttEngine
-        await load(kind)
+        if kind == .parakeetV2, !(await parakeetV2.isDownloaded), await parakeetV3.isDownloaded {
+            await load(.parakeetV3)          // instant availability while v2 downloads in the background
+            Task { await self.load(.parakeetV2); if Preferences.shared.keepModelsLoaded { await self.unload(.parakeetV3) } }
+        } else {
+            await load(kind)
+        }
         await vad.load()
         fmAvailability = await appleFM.availabilityDescription
         await appleFM.prewarm()
