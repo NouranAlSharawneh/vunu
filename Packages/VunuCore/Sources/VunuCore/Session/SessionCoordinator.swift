@@ -37,6 +37,9 @@ public final class SessionCoordinator {
     private var processingTask: Task<Void, Never>?
     private var handsFreeFromDoubleTap = false
     private var micWarnedThisSession = false
+    private var visibleSymbols: [String] = []
+    private var editWatcher: Task<Void, Never>?
+    private var lastCommandInstruction: String?
 
     private init() {
         let engine = HotkeyEngine { event in
@@ -184,6 +187,9 @@ public final class SessionCoordinator {
         Task {
             let snap = await FocusTracker.shared.snapshot()
             if self.state.isCapturing { self.target = snap }
+            if let snap, snap.isCodeEditor || snap.isTerminal, Preferences.shared.variableRecognition {
+                self.visibleSymbols = await FocusTracker.shared.perform { EditorReader.symbols(snap) }
+            } else { self.visibleSymbols = [] }
             // Prewarm the exact LLM session for this app's style so the first token is fast on release.
             if Preferences.shared.formatter == .appleIntelligence, Preferences.shared.cleanupLevel != .none {
                 let ctx = self.makeContext(target: snap)
@@ -250,9 +256,17 @@ public final class SessionCoordinator {
     private func startPreview() {
         let p = LivePreviewSession { text in Task { @MainActor in SessionCoordinator.shared.previewText = text } }
         preview = p
-        let locale = Locale(identifier: Preferences.shared.languages.first ?? "en-US")
+        let code = Preferences.shared.languages.first ?? "en"
+        let locale = Locale(identifier: code == "en" ? "en-US" : code)
         previewFeeder = Task { [weak self] in
             guard let self else { return }
+            // Assets must be installed for the locale; kick off the install once and skip preview this session.
+            let installed = await AppleSpeechEngine.installedLocales()
+            guard installed.contains(where: { $0.identifier.hasPrefix(String(locale.identifier.prefix(2))) }) else {
+                Log.speech.info("preview: installing speech assets for \(locale.identifier)")
+                try? await ModelManager.shared.appleSpeech.load { _, _ in }
+                return
+            }
             do { try await p.start(locale: locale) } catch { Log.speech.error("preview start failed: \(error)"); return }
             var fed = 0
             while !Task.isCancelled, self.state == .recording {
@@ -424,6 +438,7 @@ public final class SessionCoordinator {
             timings.insertPath = path
             record.status = .done
             Sounds.shared.playTick()
+            if prefs.learnFromEdits, mode != .scratchpad, let t = finalTarget, !t.isTerminal { startEditWatcher(target: t, inserted: textToInsert, recordID: record.id) }
             if out.pressEnter && !prefs.pressEnterExplained {
                 prefs.pressEnterExplained = true
                 show(SessionNotice(.info, "\"Press enter\" command", detail: "Say \"press enter\" at the end of a dictation to send it. Turn this off in Settings → Experimental.", action: .enablePressEnter, duration: 8))
@@ -466,9 +481,15 @@ public final class SessionCoordinator {
             state = .idle; finishIdle(); return
         }
         state = .formatting
+        lastCommandInstruction = instruction
         do {
             let rewritten = try await ModelManager.shared.appleFM.rewrite(selection: selection, instruction: instruction, deadline: .seconds(8))
             let cleaned = FormattingPipeline.stripWrapping(rewritten)
+            if cleaned.trimmed == selection.trimmed || cleaned.isEmpty {
+                rec.status = .cancelled; try? Database.shared.save(rec)
+                show(SessionNotice(.info, "No change", detail: "The model kept the text as it was. Try a more specific instruction."))
+                state = .idle; finishIdle(); return
+            }
             state = .inserting
             let t = await FocusTracker.shared.snapshot(readBrowserURL: false)
             _ = await Inserter.shared.insert(cleaned, into: t)
@@ -497,6 +518,10 @@ public final class SessionCoordinator {
         ctx.cleanupLevel = prefs.cleanupLevel
         ctx.formatterKind = prefs.formatter
         ctx.devVocabulary = prefs.devVocabulary
+        ctx.isCodeTarget = (target?.isTerminal ?? false) || (target?.isCodeEditor ?? false)
+        ctx.visibleSymbols = visibleSymbols
+        ctx.vibe.fileTagging = prefs.fileTagging
+        ctx.vibe.variableRecognition = prefs.variableRecognition
         ctx.language = Locale.current.localizedString(forLanguageCode: prefs.languages.first ?? "en") ?? "English"
         return ctx
     }
@@ -573,6 +598,49 @@ public final class SessionCoordinator {
     /// Test/preview hook: force a state + target for offscreen rendering.
     public func debugSet(state: SessionState, mode: SessionMode = .pushToTalk, target: FocusSnapshot? = nil) { self.state = state; self.mode = mode; self.target = target }
     #endif
+
+    /// Command Mode "Retry": re-run the last instruction on the current selection.
+    public func retryCommandMode() {
+        guard let instruction = lastCommandInstruction, state == .idle else { return }
+        Task {
+            let sel = await FocusTracker.shared.perform { () -> String? in
+                guard let snap = FocusTracker.shared.snapshotSync(readBrowserURL: false), let el = snap.element?.element, !snap.isSecure else { return nil }
+                return AX.string(el, kAXSelectedTextAttribute)
+            }
+            guard let sel, !sel.isEmpty else { show(SessionNotice(.warning, "Select the text first, then Retry")); return }
+            commandSelection = sel
+            hotkeys.setSessionActive(true)
+            processingSince = Date()
+            var rec = Transcript(appName: "Command Mode", status: .processing, mode: SessionMode.commandMode.rawValue)
+            rec = (try? Database.shared.save(rec)) ?? rec
+            await runCommandMode(instruction: instruction, record: rec, timings: StageTimings())
+        }
+    }
+
+    /// Learn from edits: for 60 s after an insertion, watch the target text; a single changed word is offered for the Dictionary.
+    private func startEditWatcher(target: FocusSnapshot, inserted: String, recordID: Int64?) {
+        editWatcher?.cancel()
+        let insertedTrim = inserted.trimmed
+        guard TextUtil.wordCount(insertedTrim) >= 1, insertedTrim.count <= 2_000 else { return }
+        editWatcher = Task { [weak self] in
+            var offered = Set<String>()
+            for delay in [15, 30, 60] {
+                try? await Task.sleep(for: .seconds(delay - (delay == 15 ? 0 : delay == 30 ? 15 : 30)))
+                guard let self, !Task.isCancelled, !self.state.isActive else { return }
+                guard let value = await FocusTracker.shared.perform({ EditorReader.value(target, maxLength: 60_000) }) else { continue }
+                if value.contains(insertedTrim) { continue }   // untouched
+                guard let (wrong, right) = EditWatcher.singleWordCorrection(original: insertedTrim, current: value) else { continue }
+                let key = wrong.lowercased() + "→" + right
+                guard !offered.contains(key) else { continue }
+                offered.insert(key)
+                if let id = recordID, var t = try? Database.shared.transcript(id: id) { t.editedText = insertedTrim.replacingOccurrences(of: wrong, with: right); try? Database.shared.save(t) }
+                await MainActor.run {
+                    self.show(SessionNotice(.info, "Add “\(right)” to your Dictionary?", detail: "You changed “\(wrong)” to “\(right)”. Vunu will use it from now on.", action: .addToDictionary(word: right, misspelling: wrong), duration: 12))
+                }
+                return
+            }
+        }
+    }
 
     /// Whether processing has taken > 1.5 s (Flow Bar "Taking longer than usual").
     public var takingLonger: Bool { processingSince.map { Date().timeIntervalSince($0) > 1.5 } ?? false }

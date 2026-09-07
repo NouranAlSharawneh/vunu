@@ -36,7 +36,7 @@ struct FlowBarView: View {
     private var pill: some View {
         ZStack {
             Capsule().fill(Tokens.ink.opacity(0.92))
-            Capsule().strokeBorder(Tokens.barBorder, lineWidth: 1)
+            Capsule().strokeBorder(session.mode == .commandMode && (isRecording || isProcessing) ? Tokens.lilac : Tokens.barBorder, lineWidth: session.mode == .commandMode && (isRecording || isProcessing) ? 1.5 : 1)
             HStack(spacing: 8) {
                 if isRecording || isProcessing {
                     if let icon = session.target?.icon {
@@ -48,6 +48,9 @@ struct FlowBarView: View {
                             .onTapGesture(perform: onCancel)
                             .help("Cancel (Esc)")
                     }
+                }
+                if session.mode == .commandMode && (isRecording || isProcessing) {
+                    Text(isProcessing ? "Editing…" : "Command").font(Fonts.ui(10, weight: .semibold)).foregroundStyle(Tokens.lilac)
                 }
                 if isProcessing {
                     BreathingDots().frame(width: 40, height: 20)

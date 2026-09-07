@@ -11,6 +11,9 @@ public struct FormatContext: Sendable {
     public var cleanupLevel: CleanupLevel = .medium
     public var formatterKind: FormatterKind = .appleIntelligence
     public var devVocabulary = true
+    public var isCodeTarget = false
+    public var visibleSymbols: [String] = []
+    public var vibe = VibeCodingRules.Options()
     public init() {}
 }
 
@@ -79,6 +82,7 @@ public final class FormattingPipeline: Sendable {
             }
         } else if wantLLM { reject = "no formatter" } else if ctx.cleanupLevel == .none { reject = "level none" } else if words < 4 { reject = "short" }
 
+        if ctx.isCodeTarget { final = VibeCodingRules.apply(final, visibleSymbols: ctx.visibleSymbols, options: ctx.vibe) }
         final = StylePolicy.apply(final, style: ctx.style, preserve: ctx.dictionary.map(\.word))
         final = MessagingAppPolicy.apply(final, isMessaging: ctx.isMessaging, style: ctx.style)
         return FormatOutcome(ruleText: ruleText, text: final, llmUsed: llmUsed, llmRejectReason: reject, rulesMs: rulesMs, llmMs: llmMs, pressEnter: pressEnter)

@@ -128,6 +128,14 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         if state != .idle {
             let status = NSMenuItem(title: state.label, action: nil, keyEquivalent: ""); status.isEnabled = false; m.addItem(status); m.addItem(.separator())
         }
+        if let st = try? Database.shared.stats(), st.sessions > 0 {
+            let today = (try? Database.shared.wordsToday()) ?? 0
+            let faster = st.avgWPM > 0 ? String(format: " · %.1fx faster than typing", max(1, st.avgWPM / 45)) : ""
+            let line = NSMenuItem(title: "Today: \(today) words · 🔥 \(st.streakDays) day\(st.streakDays == 1 ? "" : "s")\(faster)", action: nil, keyEquivalent: "")
+            line.isEnabled = false
+            m.addItem(line)
+            m.addItem(.separator())
+        }
         m.addItem(withTitle: "Open Vunu", action: #selector(openHub), keyEquivalent: "").target = self
         m.addItem(withTitle: "Paste last transcript", action: #selector(pasteLast), keyEquivalent: "").target = self
         m.addItem(withTitle: "Copy last transcript", action: #selector(copyLast), keyEquivalent: "").target = self

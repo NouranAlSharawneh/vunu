@@ -132,6 +132,7 @@ struct DiffView: View {
             HStack {
                 Button("Undo") { Task { let t = await FocusTracker.shared.snapshot(); _ = await Inserter.shared.insert(original, into: t); onClose() } }.buttonStyle(SecondaryButtonStyle())
                 Button("Copy") { PasteboardSnapshot.writeText(rewritten) }.buttonStyle(SecondaryButtonStyle())
+                Button("Retry") { onClose(); Task { try? await Task.sleep(for: .milliseconds(200)); SessionCoordinator.shared.retryCommandMode() } }.buttonStyle(SecondaryButtonStyle())
                 Spacer()
                 Button("Accept") { onClose() }.buttonStyle(PrimaryButtonStyle())
             }

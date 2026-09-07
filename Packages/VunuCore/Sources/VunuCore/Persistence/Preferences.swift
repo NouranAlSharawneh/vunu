@@ -100,7 +100,7 @@ public final class Preferences {
         autoDetectLanguage = d.object(forKey: "autoDetectLanguage") as? Bool ?? true
         preferredMicrophoneUID = d.string(forKey: "preferredMicrophoneUID")
         livePreview = d.bool(forKey: "livePreview")
-        commandModeEnabled = d.bool(forKey: "commandModeEnabled")
+        commandModeEnabled = d.object(forKey: "commandModeEnabled") as? Bool ?? true
         pressEnterCommand = d.object(forKey: "pressEnterCommand") as? Bool ?? true
         pressEnterExplained = d.bool(forKey: "pressEnterExplained")
         whisperMode = d.bool(forKey: "whisperMode")
@@ -116,6 +116,9 @@ public final class Preferences {
         airPodsWarningShown = d.bool(forKey: "airPodsWarningShown")
         seenFnKeyCount = d.integer(forKey: "seenFnKeyCount")
         devVocabulary = d.object(forKey: "devVocabulary") as? Bool ?? true
+        fileTagging = d.object(forKey: "fileTagging") as? Bool ?? true
+        variableRecognition = d.object(forKey: "variableRecognition") as? Bool ?? true
+        learnFromEdits = d.object(forKey: "learnFromEdits") as? Bool ?? true
     }
 
     public var onboardingCompleted: Bool { didSet { d.set(onboardingCompleted, forKey: "onboardingCompleted") } }
@@ -152,6 +155,9 @@ public final class Preferences {
     public var airPodsWarningShown: Bool { didSet { d.set(airPodsWarningShown, forKey: "airPodsWarningShown") } }
     public var seenFnKeyCount: Int { didSet { d.set(seenFnKeyCount, forKey: "seenFnKeyCount") } }
     public var devVocabulary: Bool { didSet { d.set(devVocabulary, forKey: "devVocabulary") } }
+    public var fileTagging: Bool { didSet { d.set(fileTagging, forKey: "fileTagging") } }
+    public var variableRecognition: Bool { didSet { d.set(variableRecognition, forKey: "variableRecognition") } }
+    public var learnFromEdits: Bool { didSet { d.set(learnFromEdits, forKey: "learnFromEdits") } }
 
     public func isNotificationEnabled(_ key: String) -> Bool { notificationsEnabled[key] ?? true }
 

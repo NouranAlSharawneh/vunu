@@ -220,6 +220,11 @@ struct ToastView: View {
                 Button("Disable") { Preferences.shared.pressEnterCommand = false; SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle(secondary: true))
                 Button("Keep on") { SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle())
             }
+        case .addToDictionary(let word, let misspelling):
+            HStack(spacing: 4) {
+                Button("No") { SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle(secondary: true))
+                Button("Add") { try? Database.shared.save(DictionaryEntry(word: word, misspelling: misspelling)); SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle())
+            }
         case .recover:
             Button("Retry") { if let t = try? Database.shared.transcripts(limit: 1).first { SessionCoordinator.shared.retry(t) }; SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle())
         case .none: EmptyView()

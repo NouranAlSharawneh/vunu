@@ -44,6 +44,10 @@ On first launch, grant **Microphone** and **Accessibility** when asked. The spee
 - Say "period", "comma", "new line", "at sign", "john at gmail dot com", "scratch that", "press enter".
 - **Lists need no keyword.** "Here's the plan, first buy milk, second call mom, third finish the report" becomes an intro line and a numbered list. "number one… number two…" works too. For bullets say "bullet point" before each item: "todo, bullet point eggs, bullet point bread".
 - A built-in developer vocabulary fixes what the recognizer hears: "super pace" → Supabase, "cloud code" → Claude Code, "postgress" → Postgres, "key clock" → Keycloak, "direct us" → Directus, and a few hundred more. Add your own in Dictionary.
+- **Claude Code / Cursor aware.** In a terminal or editor, "at main dot py" becomes `@main.py` (name only, the tool resolves the path), "at session coordinator dot swift" becomes `@SessionCoordinator.swift`, and code-looking words (`getUserName`, `fetch_user_name`, `config.yaml`) get backticks, using the exact casing of identifiers visible in your editor.
+- **Learns from your edits.** Fix a word within a minute of a dictation and Vunu offers to add the correction to your Dictionary.
+- **Command Mode.** Select text, hold `fn`+`⌃`, say "make this more concise". A diff with Accept / Undo / Copy / Retry appears.
+- The menu bar shows today's word count, your streak, and how much faster than typing you were.
 - All shortcuts are rebindable in Settings → General → Shortcuts.
 
 ## The app

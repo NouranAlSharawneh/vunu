@@ -288,8 +288,9 @@ struct VibeCodingSettings: View {
             Text("Vibe coding").font(Fonts.ui(18, weight: .semibold)).foregroundStyle(HubColors.text).padding(.bottom, 8)
             SettingRow(title: "Developer vocabulary", subtitle: "\(DevVocabulary.terms.count) built-in terms: Supabase, Claude Code, Postgres, Keycloak, Directus, Figma, Next.js, Kubernetes… Your Dictionary always wins.") { Toggle("", isOn: $prefs.devVocabulary).toggleStyle(.switch) }
             Text("Terminals (Terminal, iTerm2, Ghostty, Warp, Kitty, Alacritty) and editors already get the paste path with trailing-newline stripping and chunked paste for long text in Claude Code / Codex.").font(Fonts.ui(12)).foregroundStyle(HubColors.secondaryText).padding(.bottom, 8)
-            SettingRow(title: "Variable recognition", subtitle: "Wrap identifiers visible in VS Code / Cursor / Windsurf in backticks — coming soon") { Toggle("", isOn: .constant(false)).toggleStyle(.switch).disabled(true) }
-            SettingRow(title: "File tagging", subtitle: "“at main.py” → @main.py in Cursor / Windsurf chat — coming soon") { Toggle("", isOn: .constant(false)).toggleStyle(.switch).disabled(true) }
+            SettingRow(title: "Variable recognition", subtitle: "In terminals and editors, code-looking words (camelCase, snake_case, file names) get backticks; identifiers visible in the editor keep their exact casing") { Toggle("", isOn: $prefs.variableRecognition).toggleStyle(.switch) }
+            SettingRow(title: "File tagging", subtitle: "“at main dot py” → @main.py (name only, Claude Code / Cursor resolve the path)") { Toggle("", isOn: $prefs.fileTagging).toggleStyle(.switch) }
+            SettingRow(title: "Learn from your edits", subtitle: "If you correct a word right after a dictation, Vunu offers to add it to the Dictionary") { Toggle("", isOn: $prefs.learnFromEdits).toggleStyle(.switch) }
         }
     }
 }
@@ -299,7 +300,7 @@ struct ExperimentalSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Experimental").font(Fonts.ui(18, weight: .semibold)).foregroundStyle(HubColors.text).padding(.bottom, 8)
-            SettingRow(title: "Command Mode", subtitle: "Hold fn+⌃, describe how to change the selected text") { Toggle("", isOn: $prefs.commandModeEnabled).toggleStyle(.switch) }
+            SettingRow(title: "Command Mode", subtitle: "Select text, hold fn+⌃, say the change (\"make this shorter\"). A diff appears with Accept / Undo / Retry") { Toggle("", isOn: $prefs.commandModeEnabled).toggleStyle(.switch) }
             SettingRow(title: "Press Enter command", subtitle: "Say “press enter” at the end to send") { Toggle("", isOn: $prefs.pressEnterCommand).toggleStyle(.switch) }
             SettingRow(title: "Whisper mode", subtitle: "Raise input gain for quiet speech") { Toggle("", isOn: $prefs.whisperMode).toggleStyle(.switch) }
             SettingRow(title: "Live preview", subtitle: "Show Apple Speech's live text under the Flow Bar while you talk (English locales)") { Toggle("", isOn: $prefs.livePreview).toggleStyle(.switch) }

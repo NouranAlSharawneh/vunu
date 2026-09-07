@@ -21,7 +21,7 @@ public enum SessionMode: String, Sendable, Equatable { case pushToTalk, handsFre
 /// Short, actionable messages shown on the Flow Bar / toast panel (verbatim Wispr copy where it exists).
 public struct SessionNotice: Sendable, Equatable, Identifiable {
     public enum Kind: Sendable, Equatable { case info, warning, error, success }
-    public enum Action: Sendable, Equatable { case none, copy(String), insert(String), openSettings, chooseMicrophone, enablePressEnter, recover }
+    public enum Action: Sendable, Equatable { case none, copy(String), insert(String), openSettings, chooseMicrophone, enablePressEnter, recover, addToDictionary(word: String, misspelling: String) }
     public let id = UUID()
     public var kind: Kind
     public var title: String

@@ -106,6 +106,13 @@ public final class Database: Sendable {
         }
     }
 
+    public func wordsToday() throws -> Int {
+        try queue.read { db in
+            let start = Calendar.current.startOfDay(for: Date())
+            return try Int.fetchOne(db, sql: "SELECT COALESCE(SUM(wordCount),0) FROM transcript WHERE status = 'done' AND createdAt >= ?", arguments: [start]) ?? 0
+        }
+    }
+
     // MARK: dictionary
     public func dictionary() throws -> [DictionaryEntry] { try queue.read { try DictionaryEntry.order(Column("createdAt").desc).fetchAll($0) } }
     @discardableResult public func save(_ e: DictionaryEntry) throws -> DictionaryEntry { try queue.write { db in var c = e; try c.save(db); return c } }
