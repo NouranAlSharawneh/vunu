@@ -1,0 +1,84 @@
+name: Vunu
+options:
+  bundleIdPrefix: dev.nunu
+  deploymentTarget:
+    macOS: "26.0"
+  xcodeVersion: "26.2"
+  createIntermediateGroups: true
+  generateEmptyDirectories: true
+settings:
+  base:
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGN_IDENTITY: "Vunu Dev"
+    DEVELOPMENT_TEAM: ""
+    PROVISIONING_PROFILE_SPECIFIER: ""
+    ENABLE_APP_SANDBOX: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+    DEAD_CODE_STRIPPING: YES
+  configs:
+    Release:
+      SWIFT_OPTIMIZATION_LEVEL: "-O"
+      SWIFT_COMPILATION_MODE: wholemodule
+packages:
+  VunuCore:
+    path: Packages/VunuCore
+targets:
+  Vunu:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+        excludes:
+          - "Fonts/*.txt"
+    dependencies:
+      - package: VunuCore
+        product: VunuCore
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleName: Vunu
+        CFBundleDisplayName: Vunu
+        CFBundleIdentifier: dev.nunu.vunu
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundleIconFile: AppIcon
+        LSUIElement: true
+        LSMinimumSystemVersion: "26.0"
+        NSMicrophoneUsageDescription: "Vunu records your voice while you hold the fn key so it can transcribe it on-device."
+        NSSpeechRecognitionUsageDescription: "Vunu uses on-device speech recognition to transcribe your dictation."
+        NSAppleEventsUsageDescription: "Vunu can open the default browser for spoken search commands."
+        ATSApplicationFontsPath: Fonts
+        NSHumanReadableCopyright: "© 2026 Nunu. Local-only dictation."
+        NSPrincipalClass: NSApplication
+        NSSupportsAutomaticTermination: false
+        NSSupportsSuddenTermination: false
+    entitlements:
+      path: App/Vunu.entitlements
+      properties:
+        com.apple.security.device.audio-input: true
+        com.apple.security.app-sandbox: false
+        com.apple.security.cs.disable-library-validation: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.nunu.vunu
+        PRODUCT_NAME: Vunu
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_STRICT_CONCURRENCY: complete
+        OTHER_LDFLAGS: ["-ObjC"]
+    preBuildScripts: []
+schemes:
+  Vunu:
+    build:
+      targets:
+        Vunu: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - package: VunuCore/VunuCoreTests
