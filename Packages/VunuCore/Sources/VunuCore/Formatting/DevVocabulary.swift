@@ -301,15 +301,19 @@ public enum DevVocabulary {
         var list: [(String, String)] = []
         for t in terms { for h in t.heard { list.append((h, t.word)) } }
         list.sort { $0.0.count > $1.0.count }
-        return list.map { (TextUtil.regex("(?<![\\w])" + NSRegularExpression.escapedPattern(for: $0.0) + "(?![\\w])"), $0.1, $0.0) }
+        return list.map { (TextUtil.regex("(?<![\\w])" + NSRegularExpression.escapedPattern(for: $0.0) + "(?![\\w])"), $0.1, String($0.0.split(separator: " ")[0])) }
     }()
+
+    static func wordSet(_ s: String) -> Set<String> {
+        Set(s.lowercased().split { !($0.isLetter || $0.isNumber) }.map(String.init))
+    }
 
     public static func apply(_ text: String) -> String {
         var out = text
-        var lower = text.lowercased()
-        for (re, word, probe) in compiled where lower.contains(probe) {   // cheap substring probe before the regex
+        var words = wordSet(text)
+        for (re, word, probe) in compiled where words.contains(probe) {   // O(1) first-word probe before the regex
             let replaced = re.stringByReplacingMatches(in: out, range: NSRange(out.startIndex..., in: out), withTemplate: NSRegularExpression.escapedTemplate(for: word))
-            if replaced != out { out = replaced; lower = out.lowercased() }
+            if replaced != out { out = replaced; words = wordSet(out) }
         }
         return out
     }
