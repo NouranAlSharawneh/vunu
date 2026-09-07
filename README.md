@@ -41,7 +41,8 @@ On first launch, grant **Microphone** and **Accessibility** when asked. The spee
 - Recording keeps going while you ⌘-Tab; the text is inserted wherever the cursor is when you release.
 - Music never pauses or ducks.
 - While recording, the menu bar icon and the floating bar show the icon of the app that will receive the text.
-- Say "period", "comma", "new line", "at sign", "john at gmail dot com", "first… second… third…", "scratch that", "press enter".
+- Say "period", "comma", "new line", "at sign", "john at gmail dot com", "scratch that", "press enter".
+- **Lists need no keyword.** "Here's the plan, first buy milk, second call mom, third finish the report" becomes an intro line and a numbered list. "number one… number two…" works too. For bullets say "bullet point" before each item: "todo, bullet point eggs, bullet point bread".
 - A built-in developer vocabulary fixes what the recognizer hears: "super pace" → Supabase, "cloud code" → Claude Code, "postgress" → Postgres, "key clock" → Keycloak, "direct us" → Directus, and a few hundred more. Add your own in Dictionary.
 - All shortcuts are rebindable in Settings → General → Shortcuts.
 
