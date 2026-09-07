@@ -32,3 +32,10 @@ final class DevVocabularyAITests: XCTestCase {
         XCTAssertEqual(DevVocabulary.apply("a bright sonnet about the sea"), "a bright sonnet about the sea")
     }
 }
+
+final class DevVocabularyHeardTests: XCTestCase {
+    func testRealMishearings() {
+        XCTAssertEqual(DevVocabulary.apply("Need code, letly five, lead code."), "LeetCode, Netlify, LeetCode.")
+        XCTAssertEqual(DevVocabulary.apply("we use super pace and neme name chip"), "we use Supabase and Namecheap")
+    }
+}
