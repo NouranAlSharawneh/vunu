@@ -9,7 +9,7 @@ export XCODEGEN_QUIET=1
 xcodegen generate --spec project.yml --quiet
 LOG="$ROOT/build/xcodebuild.log"
 if ! xcodebuild -project Vunu.xcodeproj -scheme Vunu -configuration "$CONFIG" \
-  -derivedDataPath "$DERIVED" -destination 'platform=macOS,arch=arm64' build > "$LOG" 2>&1; then
+  -derivedDataPath "$DERIVED" -destination 'platform=macOS,arch=arm64' ARCHS=arm64 ONLY_ACTIVE_ARCH=YES build > "$LOG" 2>&1; then
   grep -E "error:" "$LOG" | sort -u | head -20
   echo "BUILD FAILED (see $LOG)"; exit 1
 fi
