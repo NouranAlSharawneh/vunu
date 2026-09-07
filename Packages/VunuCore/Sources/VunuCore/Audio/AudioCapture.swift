@@ -38,7 +38,9 @@ public final class AudioCapture: @unchecked Sendable {
     public var isEngineRunning: Bool { state.withLock { $0.engineRunning } }
     public var isRecording: Bool { state.withLock { $0.recording } }
     /// 0…1 smoothed input level, for the waveform / mic test.
-    public var level: Float { state.withLock { $0.level } }
+    public var level: Float { debugLevelOverride ?? state.withLock { $0.level } }
+    /// Test/preview hook so the waveform can be rendered offscreen with a fake level.
+    public nonisolated(unsafe) var debugLevelOverride: Float? = nil
     public var peak: Float { state.withLock { $0.peak } }
     public var recordedDuration: TimeInterval { state.withLock { Double($0.samples.count) / Self.sampleRate } }
     public var recordedSampleCount: Int { state.withLock { $0.samples.count } }

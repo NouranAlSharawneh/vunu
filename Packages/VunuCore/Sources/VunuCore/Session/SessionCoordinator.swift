@@ -568,6 +568,11 @@ public final class SessionCoordinator {
         if sofar.count > 8000 { stopAndProcess() } else { cancel(silent: true) }
     }
 
+    #if DEBUG
+    /// Test/preview hook: force a state + target for offscreen rendering.
+    public func debugSet(state: SessionState, mode: SessionMode = .pushToTalk, target: FocusSnapshot? = nil) { self.state = state; self.mode = mode; self.target = target }
+    #endif
+
     /// Whether processing has taken > 1.5 s (Flow Bar "Taking longer than usual").
     public var takingLonger: Bool { processingSince.map { Date().timeIntervalSince($0) > 1.5 } ?? false }
 }

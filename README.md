@@ -4,6 +4,13 @@ A native, local-only voice dictation app for macOS. Hold **fn**, talk, release, 
 
 Built as a Wispr Flow-style tool in Swift/SwiftUI/AppKit. Requires **macOS 26** on Apple silicon.
 
+<p align="center">
+  <img src="docs/screenshots/flowbar-idle.png" width="180" alt="Flow Bar idle">
+  <img src="docs/screenshots/flowbar-recording.png" width="260" alt="Flow Bar recording into Terminal">
+  <img src="docs/screenshots/flowbar-processing.png" width="200" alt="Flow Bar processing">
+</p>
+<p align="center"><em>The floating bar while idle, recording (showing the app that will receive the text), and processing.</em></p>
+
 ## Install
 
 One line, on any Mac running macOS 26:
@@ -37,6 +44,16 @@ On first launch, grant **Microphone** and **Accessibility** when asked. The spee
 - Say "period", "comma", "new line", "at sign", "john at gmail dot com", "first… second… third…", "scratch that", "press enter".
 - A built-in developer vocabulary fixes what the recognizer hears: "super pace" → Supabase, "cloud code" → Claude Code, "postgress" → Postgres, "key clock" → Keycloak, "direct us" → Directus, and a few hundred more. Add your own in Dictionary.
 - All shortcuts are rebindable in Settings → General → Shortcuts.
+
+## The app
+
+| Style per app category | Settings |
+|---|---|
+| ![Style](docs/screenshots/hub-style.png) | ![Settings](docs/screenshots/hub-settings.png) |
+
+| Dictionary | Snippets |
+|---|---|
+| ![Dictionary](docs/screenshots/hub-dictionary.png) | ![Snippets](docs/screenshots/hub-snippets.png) |
 
 ## What's inside
 

@@ -82,7 +82,7 @@ struct GeneralSettings: View {
             SettingRow(title: "Auto Cleanup", subtitle: "How much the on-device model tidies your words. Rules always run.") {
                 Picker("", selection: $prefs.cleanupLevel) { ForEach(CleanupLevel.allCases) { Text($0.title).tag($0) } }.frame(width: 130)
             }
-            SettingRow(title: "App language", subtitle: "Interface language follows macOS") { Text(Locale.current.localizedString(forIdentifier: Locale.current.identifier) ?? "System").font(Fonts.ui(12)).foregroundStyle(HubColors.secondaryText) }
+            SettingRow(title: "App language", subtitle: "Interface language follows macOS") { Text(Locale.current.localizedString(forLanguageCode: Locale.current.language.languageCode?.identifier ?? "en") ?? "English").font(Fonts.ui(12)).foregroundStyle(HubColors.secondaryText) }
         }
     }
 }

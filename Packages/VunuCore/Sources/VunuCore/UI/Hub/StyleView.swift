@@ -64,9 +64,16 @@ struct StyleView: View {
         case .other: []
         }
     }
+    private static let knownNames: [String: String] = [
+        "com.facebook.archon": "Messenger", "com.tdesktop.Telegram": "Telegram", "ru.keepcoder.Telegram": "Telegram (App Store)",
+        "org.whispersystems.signal-desktop": "Signal", "net.whatsapp.WhatsApp": "WhatsApp", "com.hnc.Discord": "Discord", "com.apple.MobileSMS": "Messages",
+        "com.tinyspeck.slackmacgap": "Slack", "com.microsoft.teams2": "Teams", "com.microsoft.teams": "Teams (classic)", "com.linkedin.LinkedIn": "LinkedIn",
+        "com.apple.mail": "Mail", "com.superhuman.electron": "Superhuman", "com.microsoft.Outlook": "Outlook", "com.readdle.smartemail-Mac": "Spark", "com.mimestream.Mimestream": "Mimestream",
+        "com.apple.FaceTime": "FaceTime",
+    ]
     private func displayName(_ id: String) -> String {
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id) { return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "") }
-        return id
+        return Self.knownNames[id] ?? id
     }
 }
 
