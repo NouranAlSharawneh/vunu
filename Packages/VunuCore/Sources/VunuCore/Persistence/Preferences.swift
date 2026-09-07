@@ -38,10 +38,10 @@ public enum FormatterKind: String, CaseIterable, Codable, Sendable, Identifiable
 }
 
 public enum AudioRetention: String, CaseIterable, Codable, Sendable, Identifiable {
-    case fourteenDays, oneDay, never
+    case never, oneDay, fourteenDays
     public var id: String { rawValue }
     public var title: String {
-        switch self { case .fourteenDays: "Store locally (14 days)"; case .oneDay: "Auto-delete after 24 h"; case .never: "Never store audio" }
+        switch self { case .never: "Never store audio (default)"; case .oneDay: "Keep 24 h (enables Retry)"; case .fourteenDays: "Keep 14 days (enables Retry)" }
     }
 }
 
@@ -94,7 +94,7 @@ public final class Preferences {
         sttEngine = SttEngineKind(rawValue: d.string(forKey: "sttEngine") ?? "") ?? .parakeetV3
         formatter = FormatterKind(rawValue: d.string(forKey: "formatter") ?? "") ?? .appleIntelligence
         keepModelsLoaded = d.object(forKey: "keepModelsLoaded") as? Bool ?? true
-        audioRetention = AudioRetention(rawValue: d.string(forKey: "audioRetention") ?? "") ?? .fourteenDays
+        audioRetention = AudioRetention(rawValue: d.string(forKey: "audioRetention") ?? "") ?? .never
         contextAwareness = d.object(forKey: "contextAwareness") as? Bool ?? true
         languages = d.stringArray(forKey: "languages") ?? ["en"]
         autoDetectLanguage = d.object(forKey: "autoDetectLanguage") as? Bool ?? true
@@ -115,6 +115,7 @@ public final class Preferences {
         secureInputBannerShown = d.bool(forKey: "secureInputBannerShown")
         airPodsWarningShown = d.bool(forKey: "airPodsWarningShown")
         seenFnKeyCount = d.integer(forKey: "seenFnKeyCount")
+        devVocabulary = d.object(forKey: "devVocabulary") as? Bool ?? true
     }
 
     public var onboardingCompleted: Bool { didSet { d.set(onboardingCompleted, forKey: "onboardingCompleted") } }
@@ -150,6 +151,7 @@ public final class Preferences {
     public var secureInputBannerShown: Bool { didSet { d.set(secureInputBannerShown, forKey: "secureInputBannerShown") } }
     public var airPodsWarningShown: Bool { didSet { d.set(airPodsWarningShown, forKey: "airPodsWarningShown") } }
     public var seenFnKeyCount: Int { didSet { d.set(seenFnKeyCount, forKey: "seenFnKeyCount") } }
+    public var devVocabulary: Bool { didSet { d.set(devVocabulary, forKey: "devVocabulary") } }
 
     public func isNotificationEnabled(_ key: String) -> Bool { notificationsEnabled[key] ?? true }
 

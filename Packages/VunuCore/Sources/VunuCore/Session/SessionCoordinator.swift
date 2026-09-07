@@ -488,6 +488,7 @@ public final class SessionCoordinator {
         ctx.userName = prefs.userName
         ctx.cleanupLevel = prefs.cleanupLevel
         ctx.formatterKind = prefs.formatter
+        ctx.devVocabulary = prefs.devVocabulary
         ctx.language = Locale.current.localizedString(forLanguageCode: prefs.languages.first ?? "en") ?? "English"
         return ctx
     }

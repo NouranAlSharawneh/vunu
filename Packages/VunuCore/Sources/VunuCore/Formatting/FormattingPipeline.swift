@@ -10,6 +10,7 @@ public struct FormatContext: Sendable {
     public var userName: String = ""
     public var cleanupLevel: CleanupLevel = .medium
     public var formatterKind: FormatterKind = .appleIntelligence
+    public var devVocabulary = true
     public init() {}
 }
 
@@ -39,6 +40,7 @@ public final class FormattingPipeline: Sendable {
             pressEnter = true
             text.removeSubrange(r)
         }
+        if ctx.devVocabulary { text = DevVocabulary.apply(text) }
         text = DictionaryApplier(entries: ctx.dictionary).apply(text)
         text = SnippetExpander(snippets: ctx.snippets).expand(text)
         let ruleText = rules.format(text)
@@ -53,12 +55,13 @@ public final class FormattingPipeline: Sendable {
         if wantLLM, let llm {
             let sw2 = Stopwatch()
             let deadlineMs = min(2_000, max(900, 35 * words))   // Apple FM: ~15 ms/word warm; formatting quality beats the strict 900 ms budget
-            let req = LLMRequest(text: ruleText, dictionaryWords: ctx.dictionary.map(\.word), userName: ctx.userName, style: ctx.style, language: ctx.language, level: ctx.cleanupLevel)
+            let preserve = ctx.dictionary.map(\.word) + (ctx.devVocabulary ? DevVocabulary.termsPresent(in: ruleText) : [])
+            let req = LLMRequest(text: ruleText, dictionaryWords: preserve, userName: ctx.userName, style: ctx.style, language: ctx.language, level: ctx.cleanupLevel)
             do {
                 let out = try await llm.cleanup(req, deadline: .milliseconds(deadlineMs))
                 llmMs = sw2.elapsedMs
                 let cleaned = Self.stripWrapping(out)
-                if let why = GuardRails.check(input: ruleText, output: cleaned, dictionaryWords: ctx.dictionary.map(\.word)) {
+                if let why = GuardRails.check(input: ruleText, output: cleaned, dictionaryWords: preserve) {
                     reject = why
                     Log.formatting.info("cleanup rejected: \(why)")
                 } else {

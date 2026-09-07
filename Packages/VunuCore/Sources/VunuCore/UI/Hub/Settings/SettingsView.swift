@@ -282,9 +282,11 @@ enum BenchmarkFixture {
 // MARK: Vibe coding / Experimental / Account
 
 struct VibeCodingSettings: View {
+    @State private var prefs = Preferences.shared
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Vibe coding").font(Fonts.ui(18, weight: .semibold)).foregroundStyle(HubColors.text).padding(.bottom, 8)
+            SettingRow(title: "Developer vocabulary", subtitle: "\(DevVocabulary.terms.count) built-in terms: Supabase, Claude Code, Postgres, Keycloak, Directus, Figma, Next.js, Kubernetes… Your Dictionary always wins.") { Toggle("", isOn: $prefs.devVocabulary).toggleStyle(.switch) }
             Text("Terminals (Terminal, iTerm2, Ghostty, Warp, Kitty, Alacritty) and editors already get the paste path with trailing-newline stripping and chunked paste for long text in Claude Code / Codex.").font(Fonts.ui(12)).foregroundStyle(HubColors.secondaryText).padding(.bottom, 8)
             SettingRow(title: "Variable recognition", subtitle: "Wrap identifiers visible in VS Code / Cursor / Windsurf in backticks — coming soon") { Toggle("", isOn: .constant(false)).toggleStyle(.switch).disabled(true) }
             SettingRow(title: "File tagging", subtitle: "“at main.py” → @main.py in Cursor / Windsurf chat — coming soon") { Toggle("", isOn: .constant(false)).toggleStyle(.switch).disabled(true) }

@@ -143,8 +143,9 @@ struct TranscriptRow: View {
                     Text(t.createdAt.formatted(date: .omitted, time: .shortened)).font(Fonts.ui(11)).foregroundStyle(Tokens.grey)
                     statusBadge
                     Spacer()
-                    if hover || expanded { actions }
+                    actions.opacity(hover || expanded ? 1 : 0)
                 }
+                .frame(height: 22)
                 Text(t.displayText.isEmpty ? (t.status == .cancelled ? "Cancelled — audio only" : "(no text)") : t.displayText)
                     .font(Fonts.ui(13)).foregroundStyle(HubColors.text).lineLimit(expanded ? nil : 2).textSelection(.enabled)
                 if expanded, !t.rawText.isEmpty, t.rawText != t.displayText {
