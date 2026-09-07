@@ -59,8 +59,8 @@ public final class SessionCoordinator {
     public func restartHotkeys() { try? tap?.restart() }
     public func reloadBindings() { hotkeys.setBindings(Preferences.shared.shortcuts) }
 
+    /// The engine is started on demand (key-down) and released when idle so the mic-in-use indicator only shows while dictating.
     public func warmAudio() {
-        do { try audio.start() } catch { Log.audio.error("audio start failed: \(error)") }
         audio.onDeviceChanged = { Task { @MainActor in SessionCoordinator.shared.deviceChangedMidSession() } }
     }
 
@@ -308,6 +308,7 @@ public final class SessionCoordinator {
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
             if !self.state.isCapturing && !self.state.isProcessing { self.state = .idle; self.target = nil; self.previewText = "" }
             _ = m
+            self.audio.releaseIfIdle()
         }
     }
 

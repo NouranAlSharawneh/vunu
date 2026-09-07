@@ -30,6 +30,7 @@ public struct RuleFormatter: Sendable {
         s = Self.protectLinks(s)
         s = Self.tidySpacing(s)
         if options.capitalize { s = Self.capitalize(s) }
+        s = ListRules.apply(s)
         s = Self.unprotectLinks(s)
         if options.terminalPunctuation { s = Self.terminalPunctuation(s) }
         return s

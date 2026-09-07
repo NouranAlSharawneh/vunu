@@ -90,7 +90,7 @@ public final class AudioCapture: @unchecked Sendable {
         engine.prepare()
         try engine.start()
         let now = ProcessInfo.processInfo.systemUptime
-        state.withLock { $0.engineRunning = true; $0.discardUntil = now + 0.06 }
+        state.withLock { $0.engineRunning = true; $0.discardUntil = now + 0.04 }
         if configObserver == nil {
             configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
                 self?.handleConfigChange()
@@ -101,7 +101,10 @@ public final class AudioCapture: @unchecked Sendable {
     }
 
     public func stop() {
-        queue.sync {
+        if Thread.isMainThread { queue.async { [self] in stopLocked() } } else { queue.sync { stopLocked() } }
+    }
+    private func stopLocked() {
+        do {
             idleTimer?.cancel(); idleTimer = nil
             engine.inputNode.removeTap(onBus: 0)
             engine.stop()
@@ -165,7 +168,20 @@ public final class AudioCapture: @unchecked Sendable {
 
     /// Level metering without recording (mic test UI). Reference-counted.
     public func startMonitoring() { if !isEngineRunning { try? start() }; state.withLock { $0.monitoring += 1 } }
-    public func stopMonitoring() { state.withLock { $0.monitoring = max(0, $0.monitoring - 1); if $0.monitoring == 0 && !$0.recording { $0.level = 0 } } }
+    public func stopMonitoring() {
+        let stopEngine = state.withLock { s -> Bool in
+            s.monitoring = max(0, s.monitoring - 1)
+            if s.monitoring == 0 && !s.recording { s.level = 0; return true }
+            return false
+        }
+        if stopEngine { stop() }
+    }
+
+    /// Stop the engine unless something (recording / level monitoring) still needs it. Keeps the mic-in-use indicator off while idle.
+    public func releaseIfIdle() {
+        let busy = state.withLock { $0.recording || $0.monitoring > 0 }
+        if !busy && isEngineRunning { stop() }
+    }
 
     /// Samples captured so far (used for "Microphone disconnected — Insert").
     public func snapshotSamples() -> [Float] { state.withLock { $0.samples } }

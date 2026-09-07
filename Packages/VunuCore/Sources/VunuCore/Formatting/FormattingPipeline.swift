@@ -52,7 +52,7 @@ public final class FormattingPipeline: Sendable {
         let wantLLM = ctx.cleanupLevel != .none && ctx.formatterKind != .rulesOnly && words >= 4 && !TextUtil.isArabicScript(ruleText)
         if wantLLM, let llm {
             let sw2 = Stopwatch()
-            let deadlineMs = min(900, max(300, 25 * words))
+            let deadlineMs = min(2_000, max(900, 35 * words))   // Apple FM: ~15 ms/word warm; formatting quality beats the strict 900 ms budget
             let req = LLMRequest(text: ruleText, dictionaryWords: ctx.dictionary.map(\.word), userName: ctx.userName, style: ctx.style, language: ctx.language, level: ctx.cleanupLevel)
             do {
                 let out = try await llm.cleanup(req, deadline: .milliseconds(deadlineMs))

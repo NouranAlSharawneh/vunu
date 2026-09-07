@@ -68,3 +68,21 @@ final class NumberRulesTests: XCTestCase {
         XCTAssertNil(NumberRules.parse(["hello"]))
     }
 }
+
+final class ListRulesTests: XCTestCase {
+    let f = RuleFormatter()
+    func testOrdinals() {
+        XCTAssertEqual(f.format("here is what we need, first buy milk, second call mom, third finish the report"),
+                       "Here is what we need:\n1. Buy milk\n2. Call mom\n3. Finish the report.")
+    }
+    func testNumberWords() {
+        XCTAssertEqual(f.format("number one wake up number two drink coffee"), "1. Wake up\n2. Drink coffee.")
+    }
+    func testNoFalsePositive() {
+        XCTAssertEqual(f.format("the first time I saw it I was second guessing"), "The first time I saw it I was second guessing.")
+        XCTAssertEqual(f.format("we came in second place"), "We came in second place.")
+    }
+    func testBullets() {
+        XCTAssertEqual(f.format("todo bullet point eggs bullet point bread"), "Todo:\n- Eggs\n- Bread.")
+    }
+}

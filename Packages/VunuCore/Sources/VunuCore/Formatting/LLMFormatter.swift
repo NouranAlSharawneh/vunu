@@ -63,7 +63,7 @@ public enum LLMPrompt {
 
 /// Post-generation guard rails from the spec. Returns a rejection reason or nil when the output is acceptable.
 public enum GuardRails {
-    static let badStarts = ["sure", "here", "here's", "here is", "i ", "i'", "the cleaned", "cleaned", "certainly", "okay,", "ok,", "as an", "transcript:", "output:"]
+    static let badStarts = ["sure", "here's", "here is", "here are", "the cleaned", "cleaned", "certainly", "as an ai", "transcript:", "output:", "cleaned transcript"]
     static let numberRe = TextUtil.regex(#"\d+(?:[.,:]\d+)*"#)
     static let urlRe = TextUtil.regex(#"(?:https?://|www\.)\S+|\b[\w.-]+@[\w-]+\.[\w.]+\b|\b[\w-]+\.(?:com|net|org|io|ai|co|dev|app|me)\b"#)
 
@@ -71,7 +71,9 @@ public enum GuardRails {
         let out = output.trimmed
         if out.isEmpty { return "empty" }
         let lower = out.lowercased()
-        if badStarts.contains(where: { lower.hasPrefix($0) }) && !input.lowercased().hasPrefix(String(lower.prefix(4))) { return "answer-like prefix" }
+        let inLower = input.lowercased()
+        if badStarts.contains(where: { lower.hasPrefix($0) && !inLower.hasPrefix($0) }) { return "answer-like prefix" }
+        if lower.hasPrefix("i ") && !inLower.hasPrefix("i ") && !inLower.hasPrefix("um i") && !inLower.hasPrefix("uh i") { return "answer-like prefix" }
         if out.contains("```") { return "markdown fence" }
         let a = TextUtil.tokens(input), b = TextUtil.tokens(out)
         if a.count >= 3 {
