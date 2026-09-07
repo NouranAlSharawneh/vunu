@@ -551,7 +551,7 @@ public enum DevVocabulary {
         var list: [(String, String)] = []
         for t in terms { for h in t.heard { list.append((h, t.word)) } }
         list.sort { $0.0.count > $1.0.count }
-        return list.map { (TextUtil.regex("(?<![\\w.@/-])" + NSRegularExpression.escapedPattern(for: $0.0) + "(?![\\w.@/-])"), $0.1, String($0.0.split(separator: " ")[0])) }
+        return list.map { (TextUtil.regex("(?<![\\w@/-])(?<!\\.)" + NSRegularExpression.escapedPattern(for: $0.0) + "(?![\\w@/-])(?!\\.[\\w])"), $0.1, String($0.0.split(separator: " ")[0])) }
     }()
 
     static func wordSet(_ s: String) -> Set<String> {
