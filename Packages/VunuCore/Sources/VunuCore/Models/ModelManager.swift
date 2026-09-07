@@ -44,6 +44,9 @@ public final class ModelManager {
 
     /// Download + load + warm the selected engine (and VAD + LLM prewarm).
     public func loadSelected() async {
+        // Compile every formatter regex once so the first dictation doesn't pay ~70 ms.
+        _ = RuleFormatter().format("warm up first one, second two, at seven thirty pm, email me at a at b dot com period")
+        _ = DevVocabulary.apply("warm up")
         let kind = Preferences.shared.sttEngine
         await load(kind)
         await vad.load()

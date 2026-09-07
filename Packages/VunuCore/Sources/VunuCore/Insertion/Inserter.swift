@@ -48,7 +48,7 @@ public actor Inserter {
             try? await Task.sleep(for: .milliseconds(i < pieces.count - 1 ? 60 : 0))
         }
         // Wait for the target to read the pasteboard: changeCount stays ours; just wait a bounded time.
-        try? await Task.sleep(for: .milliseconds(isTerminal ? 320 : 200))
+        try? await Task.sleep(for: .milliseconds(isTerminal ? 250 : 120))
         if pressEnter { KeySynth.returnKey() }
         await MainActor.run { snapshot.restore() }
         return .inserted(path: chunked ? "paste-chunked" : "paste")

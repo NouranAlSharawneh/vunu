@@ -36,7 +36,8 @@ public struct RuleFormatter: Sendable {
         return s
     }
 
-    static let linkRe = TextUtil.regex(#"(?:https?://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\b[\w-]+(?:\.[\w-]+)*\.(?:\#(tlds))\b(?:/\S*)?)"#)
+    static let fileExts = "js|ts|jsx|tsx|mjs|cjs|py|env|md|swift|json|yaml|yml|sh|zsh|css|scss|html|txt|sql|rb|go|rs|toml|lock|cfg|ini|log|csv|pdf|png|jpg|jpeg|gif|svg|zip|dmg|app|plist|xml|java|kt|c|h|cpp|m|mm|php|vue|svelte|astro"
+    static let linkRe = TextUtil.regex(#"(?:https?://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+|\b[\w-]+(?:\.[\w-]+)*\.(?:\#(tlds))\b(?:/\S*)?|(?<![\w])\.?[\w-]+\.(?:\#(fileExts))\b|\b(?:e\.g\.|i\.e\.|etc\.|vs\.))"#)
     static let dotMark = "\u{E000}"
     static func protectLinks(_ s: String) -> String {
         s.replacingMatches(linkRe) { m, src in src.group(m, 0).replacingOccurrences(of: ".", with: dotMark) }
@@ -147,6 +148,7 @@ public struct RuleFormatter: Sendable {
     static let emailRe = TextUtil.regex(#"\b([a-z0-9][a-z0-9._-]{0,40}(?:\s+dot\s+[a-z0-9][a-z0-9._-]{0,40})*)\s+at\s+([a-z0-9][a-z0-9-]{0,40})\s+dot\s+(\#(tlds))\b(?:\s+dot\s+(\#(tlds))\b)?"#)
     static let domainRe = TextUtil.regex(#"\b([a-z0-9][a-z0-9-]{1,40})\s+dot\s+(\#(tlds))\b(?:\s+dot\s+(\#(tlds))\b)?"#)
     static let wwwRe = TextUtil.regex(#"\b(?:w w w|www|triple w)\s+dot\s+"#)
+    static let emailJoinedRe = TextUtil.regex(#"\b([a-z0-9][a-z0-9._-]{0,40})\s+at\s+([a-z0-9][a-z0-9-]{0,40}\.(?:\#(tlds)))\b"#)
     static let slashRe = TextUtil.regex(#"(\.(?:\#(tlds)))\s+slash\s+([a-z0-9][a-z0-9_-]*)"#)
     static func emailsAndURLs(_ s: String) -> String {
         var out = s.replacing(wwwRe, with: "www.")
@@ -160,6 +162,7 @@ public struct RuleFormatter: Sendable {
             return "\(dom).\(tld)" + (tld2.isEmpty ? "" : ".\(tld2)")
         }
         out = out.replacing(slashRe, with: "$1/$2")
+        out = out.replacing(emailJoinedRe, with: "$1@$2")
         return out
     }
 
@@ -168,6 +171,7 @@ public struct RuleFormatter: Sendable {
     static let openNoSpaceRe = TextUtil.regex(#"([(\[{])\s+"#)
     static let multiPunctRe = TextUtil.regex(#"([,.;:!?])\s*(?:\1\s*)+"#)
     static let commaPeriodRe = TextUtil.regex(#",\s*([.!?])"#)
+    static let bangPeriodRe = TextUtil.regex(#"([!?])\s*\.(?!\d)"#)
     static let multiSpaceRe = TextUtil.regex(#"[ \t]{2,}"#)
     static let spaceNewlineRe = TextUtil.regex(#"[ \t]*\n[ \t]*"#)
     static let tripleNewlineRe = TextUtil.regex(#"\n{3,}"#)
@@ -177,6 +181,7 @@ public struct RuleFormatter: Sendable {
         out = out.replacing(openNoSpaceRe, with: "$1")
         out = out.replacing(multiPunctRe, with: "$1")
         out = out.replacing(commaPeriodRe, with: "$1")
+        out = out.replacing(bangPeriodRe, with: "$1")
         out = out.replacing(multiSpaceRe, with: " ")
         out = out.replacing(spaceNewlineRe, with: "\n")
         out = out.replacing(tripleNewlineRe, with: "\n\n")

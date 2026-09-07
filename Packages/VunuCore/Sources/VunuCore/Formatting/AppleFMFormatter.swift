@@ -35,7 +35,8 @@ public actor AppleFMFormatter: LLMFormatter {
 
     public func prewarm(for request: LLMRequest) {
         guard SystemLanguageModel.default.isAvailable else { return }
-        session(for: LLMPrompt.instructions(for: request)).prewarm()
+        let s = session(for: LLMPrompt.instructions(for: request))
+        if !s.isResponding { s.prewarm() }
     }
 
     private func session(for instructions: String) -> LanguageModelSession {

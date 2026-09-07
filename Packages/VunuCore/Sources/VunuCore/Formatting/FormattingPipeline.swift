@@ -30,6 +30,7 @@ public final class FormattingPipeline: Sendable {
     public let llm: (any LLMFormatter)?
     public init(llm: (any LLMFormatter)?) { self.llm = llm }
 
+    static let llmTriggerRe = TextUtil.regex(#"\b(?:actually|scratch that|never ?mind|i mean|no wait|wait no|sorry|first|second|third|number one|bullet|then|also|because|but)\b"#)
     static let pressEnterRe = TextUtil.regex(#"[,.!?\s]*\b(?:press|hit) (?:enter|return)\b[.!?]?\s*$"#)
 
     public func format(_ raw: String, context ctx: FormatContext) async -> FormatOutcome {
@@ -51,10 +52,13 @@ public final class FormattingPipeline: Sendable {
         var reject: String? = nil
         var llmMs = 0.0
         let words = TextUtil.wordCount(ruleText)
-        let wantLLM = ctx.cleanupLevel != .none && ctx.formatterKind != .rulesOnly && words >= 4 && !TextUtil.isArabicScript(ruleText)
+        // Short, plain dictations are finished by the rules alone (instant). The LLM runs for longer text or when
+        // there is something only it can fix: self-corrections, enumerations, false starts.
+        let needsLLM = words >= 9 || Self.llmTriggerRe.firstMatch(in: ruleText, range: NSRange(ruleText.startIndex..., in: ruleText)) != nil
+        let wantLLM = ctx.cleanupLevel != .none && ctx.formatterKind != .rulesOnly && words >= 4 && needsLLM && !TextUtil.isArabicScript(ruleText)
         if wantLLM, let llm {
             let sw2 = Stopwatch()
-            let deadlineMs = min(2_000, max(900, 35 * words))   // Apple FM: ~15 ms/word warm; formatting quality beats the strict 900 ms budget
+            let deadlineMs = min(1_500, max(700, 30 * words))   // Apple FM: ~15 ms/word warm; formatting quality beats the strict 900 ms budget
             let preserve = ctx.dictionary.map(\.word) + (ctx.devVocabulary ? DevVocabulary.termsPresent(in: ruleText) : [])
             let req = LLMRequest(text: ruleText, dictionaryWords: preserve, userName: ctx.userName, style: ctx.style, language: ctx.language, level: ctx.cleanupLevel)
             do {

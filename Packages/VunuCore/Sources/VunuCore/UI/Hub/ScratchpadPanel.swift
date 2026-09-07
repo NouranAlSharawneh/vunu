@@ -14,7 +14,7 @@ public final class ScratchpadController {
         panel.level = .floating
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.isReleasedWhenClosed = false
-        panel.backgroundColor = Tokens.nsCream
+        panel.backgroundColor = NSColor(HubColors.background)
         panel.contentView = NSHostingView(rootView: ScratchpadView(onClose: { [weak panel] in panel?.orderOut(nil) }))
     }
     public func toggle() {
@@ -31,10 +31,10 @@ struct ScratchpadView: View {
     @State private var session = SessionCoordinator.shared
     var body: some View {
         VStack(spacing: 0) {
-            TextEditor(text: $session.scratchpadText).font(Fonts.ui(14)).scrollContentBackground(.hidden).padding(10)
+            TextEditor(text: $session.scratchpadText).font(Fonts.ui(14)).foregroundStyle(HubColors.text).scrollContentBackground(.hidden).padding(10)
             Divider()
             HStack {
-                Text(session.state.isCapturing && session.mode == .scratchpad ? "Listening…" : "Hold ⌥S to dictate here").font(Fonts.ui(11)).foregroundStyle(Tokens.greyDark)
+                Text(session.state.isCapturing && session.mode == .scratchpad ? "Listening…" : "Hold ⌥S to dictate here").font(Fonts.ui(11)).foregroundStyle(HubColors.secondaryText)
                 Spacer()
                 Button("Clear") { session.scratchpadText = "" }.buttonStyle(SecondaryButtonStyle())
                 Button("Copy") { PasteboardSnapshot.writeText(session.scratchpadText) }.buttonStyle(SecondaryButtonStyle())
@@ -45,7 +45,7 @@ struct ScratchpadView: View {
                 }.buttonStyle(PrimaryButtonStyle())
             }.padding(10)
         }
-        .background(Tokens.cream)
+        .background(HubColors.background)
     }
 }
 
@@ -55,7 +55,7 @@ struct ScratchpadPageView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             PageHeader(title: "Scratchpad", subtitle: "A place to dictate freely, then copy or insert. ⌥S opens the floating version anywhere.")
-            TextEditor(text: $session.scratchpadText).font(Fonts.ui(14)).scrollContentBackground(.hidden).padding(12)
+            TextEditor(text: $session.scratchpadText).font(Fonts.ui(14)).foregroundStyle(HubColors.text).scrollContentBackground(.hidden).padding(12)
                 .background(RoundedRectangle(cornerRadius: Tokens.cardRadius).fill(HubColors.card))
             HStack { Spacer(); Button("Clear") { session.scratchpadText = "" }.buttonStyle(SecondaryButtonStyle()); Button("Copy") { PasteboardSnapshot.writeText(session.scratchpadText) }.buttonStyle(PrimaryButtonStyle()) }
         }.padding(32)

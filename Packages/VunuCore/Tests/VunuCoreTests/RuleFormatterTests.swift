@@ -86,3 +86,17 @@ final class ListRulesTests: XCTestCase {
         XCTAssertEqual(f.format("todo bullet point eggs bullet point bread"), "Todo:\n- Eggs\n- Bread.")
     }
 }
+
+final class AsrArtifactTests: XCTestCase {
+    let f = RuleFormatter()
+    func testArtifacts() {
+        XCTAssertEqual(f.format("Send me the file period thanks, I owe you one exclamation point."), "Send me the file. Thanks, I owe you one!")
+        XCTAssertEqual(f.format("You can reach me at john at gmail.com anytime."), "You can reach me at john@gmail.com anytime.")
+        XCTAssertEqual(f.format("The meeting is at 7.30 p.m. and it costs $25."), "The meeting is at 7:30 pm and it costs $25.")
+        XCTAssertEqual(f.format("Be there at 7 p.m. Bring snacks."), "Be there at 7 pm. Bring snacks.")
+        XCTAssertEqual(f.format("deployed on Vercel with Next.js."), "Deployed on Vercel with Next.js.")
+        XCTAssertEqual(f.format("open main.py and config.yaml e.g. the env file"), "Open main.py and config.yaml e.g. the env file.")
+        XCTAssertEqual(DevVocabulary.apply("john at gmail.com"), "john at gmail.com")
+        XCTAssertEqual(DevVocabulary.apply("moved to superbase"), "moved to Supabase")
+    }
+}

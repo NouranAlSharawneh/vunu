@@ -80,8 +80,19 @@ public enum NumberRules {
         }
     }
 
+    static let ampmDottedRe = TextUtil.regex(#"(\d)\s*([ap])\.m\."#)
+    static let ampmRe = TextUtil.regex(#"(\d)\s*([ap])\.?m\b"#)
+    static let ampmMarkKeepRe = TextUtil.regex("\u{E001}(?=\\s+[A-Z\\d]|$)", [])
+    static let ampmMarkDropRe = TextUtil.regex("\u{E001}")
+    static let dottedTimeRe = TextUtil.regex(#"\b(\d{1,2})\.(\d{2})(?=\s*(?:[ap]m\b|[ap]\.m\.))"#)
+
     public static func apply(_ s: String) -> String {
         var out = spokenTimes(s)
+        out = out.replacing(dottedTimeRe, with: "$1:$2")
+        out = out.replacing(ampmDottedRe, with: "$1 $2m\u{E001}")
+        out = out.replacing(ampmRe, with: "$1 $2m")
+        out = out.replacing(ampmMarkKeepRe, with: ".")
+        out = out.replacing(ampmMarkDropRe, with: "")
         out = out.replacingMatches(numberSeqRe) { m, src in
             let match = src.group(m, 0)
             let trimmedMatch = match.trimmed

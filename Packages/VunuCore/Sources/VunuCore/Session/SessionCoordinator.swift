@@ -184,6 +184,12 @@ public final class SessionCoordinator {
         Task {
             let snap = await FocusTracker.shared.snapshot()
             if self.state.isCapturing { self.target = snap }
+            // Prewarm the exact LLM session for this app's style so the first token is fast on release.
+            if Preferences.shared.formatter == .appleIntelligence, Preferences.shared.cleanupLevel != .none {
+                let ctx = self.makeContext(target: snap)
+                let req = LLMRequest(text: "", dictionaryWords: ctx.dictionary.map(\.word), userName: ctx.userName, style: ctx.style, language: ctx.language, level: ctx.cleanupLevel)
+                await ModelManager.shared.appleFM.prewarm(for: req)
+            }
         }
         Log.session.debug("armed in \(sw.elapsedMs) ms")
         armTimer?.cancel()
@@ -274,7 +280,7 @@ public final class SessionCoordinator {
         let duration = Double(samples.count) / AudioCapture.sampleRate
         let startMode = mode
         let keyUp = Stopwatch()
-        if wasArmed || duration < 0.25 { finishIdle(); return }
+        if wasArmed || duration < 0.25 { state = .cancelled; finishIdle(); return }
         processingSince = Date()
         processingTask = Task { await process(samples: samples, duration: duration, mode: startMode, keyUp: keyUp) }
     }
@@ -306,7 +312,8 @@ public final class SessionCoordinator {
         let m = mode
         Task {
             if delay > 0 { try? await Task.sleep(for: .seconds(delay)) }
-            if !self.state.isCapturing && !self.state.isProcessing { self.state = .idle; self.target = nil; self.previewText = "" }
+            // Only a newly started capture may keep the state; everything else settles to idle.
+            if !self.state.isCapturing { self.state = .idle; self.target = nil; self.previewText = "" }
             _ = m
             self.audio.releaseIfIdle()
         }

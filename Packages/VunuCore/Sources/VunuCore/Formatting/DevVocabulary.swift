@@ -33,7 +33,7 @@ public enum DevVocabulary {
         Term(word: "Vunu", heard: ["voo new", "vuno", "vunu", "vu new"]),
         Term(word: "Nunu", heard: ["new new", "nunu", "noo noo"]),
         // Backends, databases, auth
-        Term(word: "Supabase", heard: ["super base", "super pace", "supa base", "soup a base", "suppa base", "supabase", "super bass", "super pays"]),
+        Term(word: "Supabase", heard: ["super base", "superbase", "super pace", "supa base", "soup a base", "suppa base", "supabase", "super bass", "super pays"]),
         Term(word: "Postgres", heard: ["postgress", "post gres", "post grass", "post gress", "postgre", "postgres", "post grease"]),
         Term(word: "PostgreSQL", heard: ["postgre s q l", "postgres q l", "postgresql", "postgre sequel"]),
         Term(word: "Keycloak", heard: ["key clock", "key cloak", "keycloak", "key cloke"]),
@@ -301,7 +301,7 @@ public enum DevVocabulary {
         var list: [(String, String)] = []
         for t in terms { for h in t.heard { list.append((h, t.word)) } }
         list.sort { $0.0.count > $1.0.count }
-        return list.map { (TextUtil.regex("(?<![\\w])" + NSRegularExpression.escapedPattern(for: $0.0) + "(?![\\w])"), $0.1, String($0.0.split(separator: " ")[0])) }
+        return list.map { (TextUtil.regex("(?<![\\w.@/-])" + NSRegularExpression.escapedPattern(for: $0.0) + "(?![\\w.@/-])"), $0.1, String($0.0.split(separator: " ")[0])) }
     }()
 
     static func wordSet(_ s: String) -> Set<String> {

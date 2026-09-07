@@ -1,0 +1,52 @@
+[
+ {
+  "name": "greeting",
+  "spoken": "Hey Sarah, just checking in about the report. Can you send it over by Friday?",
+  "expected": "Hey Sarah, just checking in about the report. Can you send it over by Friday?"
+ },
+ {
+  "name": "list_ordinals",
+  "spoken": "Here is the plan, first buy milk, second call mom, third finish the report.",
+  "expected": "Here is the plan:\n1. Buy milk\n2. Call mom\n3. Finish the report."
+ },
+ {
+  "name": "dev_terms",
+  "spoken": "We moved the backend from Firebase to Supabase and deployed it on Vercel with Next.js.",
+  "expected": "We moved the backend from Firebase to Supabase and deployed it on Vercel with Next.js."
+ },
+ {
+  "name": "punctuation",
+  "spoken": "Are you coming tonight question mark I hope so exclamation point",
+  "expected": "Are you coming tonight? I hope so!"
+ },
+ {
+  "name": "email",
+  "spoken": "You can reach me at john at gmail dot com any time.",
+  "expected": "You can reach me at john@gmail.com anytime."
+ },
+ {
+  "name": "numbers",
+  "spoken": "The meeting is at seven thirty pm and it costs twenty five dollars.",
+  "expected": "The meeting is at 7:30 pm and it costs $25."
+ },
+ {
+  "name": "scratch",
+  "spoken": "Let's meet on Monday, scratch that, let's meet on Tuesday.",
+  "expected": "Let's meet on Tuesday."
+ },
+ {
+  "name": "terminal",
+  "spoken": "Run the tests again and then commit with the message fix login bug.",
+  "expected": "Run the tests again and then commit with the message fix login bug."
+ },
+ {
+  "name": "question",
+  "spoken": "What is the capital of France?",
+  "expected": "What is the capital of France?"
+ },
+ {
+  "name": "long",
+  "spoken": "Okay so I wanted to summarize what we discussed today. We agreed to launch the beta next week, keep the pricing page simple, and follow up with the three customers who asked about the API.",
+  "expected": "Okay so I wanted to summarize what we discussed today. We agreed to launch the beta next week, keep the pricing page simple, and follow up with the three customers who asked about the API."
+ }
+]
