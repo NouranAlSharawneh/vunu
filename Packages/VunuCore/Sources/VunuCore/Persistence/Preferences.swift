@@ -88,6 +88,8 @@ public final class Preferences {
         showFlowBarAlways = d.bool(forKey: "showFlowBarAlways")
         showInDock = d.bool(forKey: "showInDock")
         soundEffects = d.object(forKey: "soundEffects") as? Bool ?? true
+        automaticUpdateChecks = d.object(forKey: "automaticUpdateChecks") as? Bool ?? true
+        skippedUpdateVersion = d.string(forKey: "skippedUpdateVersion")
         muteMusicWhileDictating = d.bool(forKey: "muteMusicWhileDictating")
         hideFlowBarFromScreenShare = d.bool(forKey: "hideFlowBarFromScreenShare")
         cleanupLevel = CleanupLevel(rawValue: d.string(forKey: "cleanupLevel") ?? "") ?? .medium
@@ -127,6 +129,8 @@ public final class Preferences {
     public var showFlowBarAlways: Bool { didSet { d.set(showFlowBarAlways, forKey: "showFlowBarAlways") } }
     public var showInDock: Bool { didSet { d.set(showInDock, forKey: "showInDock") } }
     public var soundEffects: Bool { didSet { d.set(soundEffects, forKey: "soundEffects") } }
+    public var automaticUpdateChecks: Bool { didSet { d.set(automaticUpdateChecks, forKey: "automaticUpdateChecks") } }
+    public var skippedUpdateVersion: String? { didSet { d.set(skippedUpdateVersion, forKey: "skippedUpdateVersion") } }
     public var muteMusicWhileDictating: Bool { didSet { d.set(muteMusicWhileDictating, forKey: "muteMusicWhileDictating") } }
     public var hideFlowBarFromScreenShare: Bool { didSet { d.set(hideFlowBarFromScreenShare, forKey: "hideFlowBarFromScreenShare") } }
     public var cleanupLevel: CleanupLevel { didSet { d.set(cleanupLevel.rawValue, forKey: "cleanupLevel") } }

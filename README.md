@@ -27,6 +27,12 @@ xattr -dr com.apple.quarantine /Applications/Vunu.app
 
 On first launch, grant **Microphone** and **Accessibility** when asked. The speech model (~470 MB) downloads once into `~/Library/Application Support/Vunu/Models`.
 
+### Updating
+
+From 0.3.0 on, Vunu updates itself: once a day it asks GitHub for the latest release (the only request it makes; turn it off in Settings → System). When a new version is out, choose **Install Vunu x.y.z and Relaunch** from the menu bar, or **Check for updates** in Settings → System. It downloads the release, checks that it is signed with the same certificate as the app you have, replaces `/Applications/Vunu.app` and relaunches. Settings, dictionary, history and models are kept.
+
+On older versions (0.2.x and earlier), or if anything goes wrong, rerun the install command above. It quits Vunu, replaces the app with the latest release and reopens it.
+
 ## Use it
 
 | Action | Default |
