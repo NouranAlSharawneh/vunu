@@ -88,6 +88,31 @@ public final class FocusTracker: Sendable {
         return snap
     }
 
+    /// Bring the app (and text element) from an earlier snapshot back to the front, e.g. the user swiped to another
+    /// Space mid-dictation. Uses AX (not NSRunningApplication.activate, which a background app may be refused).
+    /// Returns true once the app is frontmost.
+    public func refocus(_ snap: FocusSnapshot) async -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: snap.pid), !app.isTerminated else { return false }
+        await perform {
+            let appEl = AX.app(pid: snap.pid)
+            if let win = AX.element(appEl, kAXFocusedWindowAttribute) {
+                AX.set(win, kAXMainAttribute, kCFBooleanTrue)
+                AXUIElementPerformAction(win, kAXRaiseAction as CFString)
+            }
+            AX.set(appEl, kAXFrontmostAttribute, kCFBooleanTrue)
+        }
+        var front = false
+        for _ in 0..<40 {   // up to ~1 s, covers the Space-switch animation
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == snap.pid { front = true; break }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        guard front else { return false }
+        if let box = snap.element { await perform { _ = AX.set(box.element, kAXFocusedAttribute, kCFBooleanTrue) } }
+        // Let the Space transition finish so the synthesized ⌘V lands in the now-key window.
+        try? await Task.sleep(for: .milliseconds(250))
+        return true
+    }
+
     /// Mirror of Preferences.extraAppsByCategory, readable off-main.
     public static let extraApps = OSAllocatedUnfairLock<[AppCategory: [String]]>(initialState: [:])
 }

@@ -82,6 +82,19 @@ public enum AudioDevices {
         inputDevices(includeVirtual: true).first { $0.uid == uid }
     }
 
+    /// "Automatic" input: the system default, except when that is a Bluetooth headset and a wired/built-in mic exists.
+    /// Opening a Bluetooth mic flips it from A2DP to HFP, which degrades music and changes the sample rate mid-session.
+    public static func automaticInputDeviceID() -> AudioDeviceID? {
+        let def = defaultInputDeviceID()
+        let devices = inputDevices()
+        guard let def, devices.first(where: { $0.id == def })?.isBluetooth == true else { return def }
+        return devices.first(where: { !$0.isBluetooth })?.id ?? def
+    }
+
+    public static func deviceExists(_ id: AudioDeviceID) -> Bool {
+        (getData(id, address(kAudioDevicePropertyDeviceIsAlive), UInt32(0)) ?? 0) != 0
+    }
+
     // MARK: output mute / volume (used only when "Mute music while dictating" is on)
     public static func isOutputRunningSomewhere(_ id: AudioDeviceID) -> Bool {
         (getData(id, address(kAudioDevicePropertyDeviceIsRunningSomewhere), UInt32(0)) ?? 0) != 0

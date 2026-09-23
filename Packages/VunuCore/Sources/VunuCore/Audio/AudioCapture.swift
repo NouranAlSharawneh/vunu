@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import AVFoundation
 import CoreAudio
 import os
+import VunuObjC
 
 /// Always-warm microphone capture. Keeps an AVAudioEngine running (no voice processing → no ducking),
 /// converts the hardware stream to 16 kHz mono Float32 once, and accumulates samples only while recording.
@@ -9,14 +10,24 @@ import os
 public final class AudioCapture: @unchecked Sendable {
     public static let sampleRate: Double = 16_000
 
-    private let engine = AVAudioEngine()
+    /// Replaced (not reused) after a configuration change: a stale engine reports the old hardware format and
+    /// installTap then raises an Objective-C exception (e.g. AirPods flipping to HFP when the mic opens).
+    private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var targetFormat: AVAudioFormat!
+    private var deviceUID: String?
+    private var currentDeviceID: AudioDeviceID?
+    private var configWork: DispatchWorkItem?
     private let state = OSAllocatedUnfairLock(initialState: State())
     private var configObserver: NSObjectProtocol?
     private var idleTimer: DispatchWorkItem?
     private let queue = DispatchQueue(label: "dev.nunu.vunu.audio", qos: .userInitiated)
-    public var onDeviceChanged: (@Sendable () -> Void)?
+    public var onDeviceChanged: (@Sendable (DeviceChange) -> Void)?
+
+    public enum DeviceChange: Sendable {
+        case formatChanged   // same device, engine restarted; recording continues
+        case deviceLost      // the input device went away or the engine could not restart
+    }
 
     private struct State {
         var recording = false
@@ -47,26 +58,28 @@ public final class AudioCapture: @unchecked Sendable {
 
     // MARK: engine lifecycle
 
-    /// Select the input device by UID (nil = system default). Restarts the engine if running.
+    /// Select the input device by UID (nil = automatic). Restarts the engine if running.
     public func selectDevice(uid: String?) {
         queue.sync {
+            deviceUID = uid
             let wasRunning = engine.isRunning
-            if wasRunning { engine.stop() }
-            engine.inputNode.removeTap(onBus: 0)
-            applyDevice(uid: uid)
-            converter = nil
-            if wasRunning { try? startLocked() }
+            teardownLocked()
+            if wasRunning {
+                do { try startLocked() } catch { Log.audio.error("restart after device select failed: \(error)") }
+            }
         }
     }
 
-    private func applyDevice(uid: String?) {
+    private func resolveDeviceID() -> AudioDeviceID? {
+        if let deviceUID, let dev = AudioDevices.device(withUID: deviceUID) { return dev.id }
+        return AudioDevices.automaticInputDeviceID()
+    }
+
+    private func applyDevice(_ id: AudioDeviceID) {
         guard let unit = engine.inputNode.audioUnit else { return }
-        var deviceID: AudioDeviceID
-        if let uid, let dev = AudioDevices.device(withUID: uid) { deviceID = dev.id }
-        else if let def = AudioDevices.defaultInputDeviceID() { deviceID = def }
-        else { return }
+        var deviceID = id
         let st = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
-        if st != noErr { Log.audio.error("failed to set input device \(deviceID): \(st)") }
+        if st != noErr { Log.audio.error("failed to set input device \(id): \(st)") }
     }
 
     /// Start (or ensure) the engine. ~30 ms cold; instant when already running.
@@ -76,21 +89,47 @@ public final class AudioCapture: @unchecked Sendable {
 
     private func startLocked() throws {
         if engine.isRunning { return }
+        if let id = resolveDeviceID(), id != currentDeviceID {
+            if currentDeviceID != nil { teardownLocked() }
+            applyDevice(id)
+            currentDeviceID = id
+        }
         let input = engine.inputNode
         // NEVER: input.setVoiceProcessingEnabled(true) — it ducks other apps' audio on macOS.
-        let hw = input.outputFormat(forBus: 0)
-        guard hw.sampleRate > 0, hw.channelCount > 0 else { throw VunuError.engineUnavailable("no input format") }
+        // After a route change the hardware format can lag behind; installTap asserts they match.
+        var hw = input.outputFormat(forBus: 0)
+        for _ in 0..<5 where !Self.formatsAgree(input) {
+            usleep(100_000)
+            hw = input.outputFormat(forBus: 0)
+        }
+        guard Self.formatsAgree(input) else {
+            teardownLocked()
+            throw VunuError.engineUnavailable("input format not ready (\(hw.sampleRate) Hz vs \(input.inputFormat(forBus: 0).sampleRate) Hz)")
+        }
         if converter == nil || converter?.inputFormat != hw {
             converter = AVAudioConverter(from: hw, to: targetFormat)
             converter?.sampleRateConverterQuality = .max
         }
         input.removeTap(onBus: 0)
         let ratio = Self.sampleRate / hw.sampleRate
-        input.installTap(onBus: 0, bufferSize: 2048, format: hw) { [weak self] buffer, _ in
-            self?.process(buffer, ratio: ratio)
+        let engine = engine
+        var startError: Error?
+        let exception = VNTryCatch {
+            input.installTap(onBus: 0, bufferSize: 2048, format: hw) { [weak self] buffer, _ in
+                self?.process(buffer, ratio: ratio)
+            }
+            engine.prepare()
+            do { try engine.start() } catch { startError = error }
         }
-        engine.prepare()
-        try engine.start()
+        if let exception {
+            Log.file("audio", "engine start raised: \(exception.localizedDescription)")
+            teardownLocked()
+            throw VunuError.engineUnavailable(exception.localizedDescription)
+        }
+        if let startError {
+            input.removeTap(onBus: 0)
+            throw startError
+        }
         let now = ProcessInfo.processInfo.systemUptime
         state.withLock { $0.engineRunning = true; $0.discardUntil = now + 0.04 }
         if configObserver == nil {
@@ -102,28 +141,58 @@ public final class AudioCapture: @unchecked Sendable {
         scheduleIdleStop()
     }
 
+    private static func formatsAgree(_ input: AVAudioInputNode) -> Bool {
+        let out = input.outputFormat(forBus: 0), hwIn = input.inputFormat(forBus: 0)
+        return out.sampleRate > 0 && out.channelCount > 0 && out.sampleRate == hwIn.sampleRate
+    }
+
     public func stop() {
         if Thread.isMainThread { queue.async { [self] in stopLocked() } } else { queue.sync { stopLocked() } }
     }
     private func stopLocked() {
-        do {
-            idleTimer?.cancel(); idleTimer = nil
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-            state.withLock { $0.engineRunning = false; $0.level = 0 }
-            Log.audio.info("audio engine stopped")
+        idleTimer?.cancel(); idleTimer = nil
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        state.withLock { $0.engineRunning = false; $0.level = 0 }
+        Log.audio.info("audio engine stopped")
+    }
+
+    /// Stop and discard the engine so the next start builds a fresh one against the current hardware. Keeps recorded samples.
+    private func teardownLocked() {
+        stopLocked()
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = nil
+        engine = AVAudioEngine()
+        converter = nil
+        currentDeviceID = nil
+    }
+
+    /// Route changes arrive in bursts (AirPods fire several while switching profiles); act once they settle.
+    private func handleConfigChange() {
+        queue.async { [self] in
+            configWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in self?.applyConfigChangeLocked() }
+            configWork = work
+            queue.asyncAfter(deadline: .now() + 0.2, execute: work)
         }
     }
 
-    private func handleConfigChange() {
-        Log.audio.warning("audio configuration changed (device removed/added)")
-        queue.async { [self] in
-            let wasRecording = state.withLock { $0.recording }
-            engine.inputNode.removeTap(onBus: 0)
-            engine.stop()
-            converter = nil
-            do { try startLocked() } catch { Log.audio.error("restart after config change failed: \(error)") }
-            if wasRecording { onDeviceChanged?() }
+    private func applyConfigChangeLocked() {
+        configWork = nil
+        let (recording, monitoring) = state.withLock { ($0.recording, $0.monitoring > 0) }
+        let lost = currentDeviceID.map { !AudioDevices.deviceExists($0) } ?? false
+        teardownLocked()
+        guard recording || monitoring else {
+            Log.file("audio", "configuration changed while idle; engine released")
+            return
+        }
+        do {
+            try startLocked()
+            Log.file("audio", "configuration changed\(lost ? " (device lost)" : ""); engine restarted")
+            if recording { onDeviceChanged?(lost ? .deviceLost : .formatChanged) }
+        } catch {
+            Log.file("audio", "restart after configuration change failed: \(error)")
+            if recording { onDeviceChanged?(.deviceLost) }
         }
     }
 

@@ -38,7 +38,7 @@ On first launch, grant **Microphone** and **Accessibility** when asked. The spee
 | Scratchpad | `⌥S` |
 | Command Mode (edit selected text by voice) | hold `fn`+`⌃` (enable in Settings → Experimental) |
 
-- Recording keeps going while you ⌘-Tab; the text is inserted wherever the cursor is when you release.
+- Recording keeps going while you ⌘-Tab, swipe to another Space, or click into another app; on release, Vunu brings the app you started in back to the front and inserts there.
 - Music never pauses or ducks.
 - While recording, the menu bar icon and the floating bar show the icon of the app that will receive the text.
 - Say "period", "comma", "new line", "at sign", "john at gmail dot com", "scratch that", "press enter".
