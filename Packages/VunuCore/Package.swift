@@ -17,10 +17,15 @@ let package = Package(
             dependencies: [
                 .product(name: "FluidAudio", package: "FluidAudio"),
                 .product(name: "GRDB", package: "GRDB.swift"),
+                "VunuObjC",
             ],
             path: "Sources/VunuCore",
             resources: [.copy("Resources")],
             swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .target(
+            name: "VunuObjC",
+            path: "Sources/VunuObjC"
         ),
         .testTarget(
             name: "VunuCoreTests",

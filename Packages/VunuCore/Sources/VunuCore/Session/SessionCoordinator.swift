@@ -64,7 +64,7 @@ public final class SessionCoordinator {
 
     /// The engine is started on demand (key-down) and released when idle so the mic-in-use indicator only shows while dictating.
     public func warmAudio() {
-        audio.onDeviceChanged = { Task { @MainActor in SessionCoordinator.shared.deviceChangedMidSession() } }
+        audio.onDeviceChanged = { change in Task { @MainActor in SessionCoordinator.shared.deviceChangedMidSession(change) } }
     }
 
     public func applyMicrophonePreference() {
@@ -229,7 +229,7 @@ public final class SessionCoordinator {
             try? await Task.sleep(for: .seconds(60))
             guard !Task.isCancelled, self.state == .recording else { return }
             self.show(SessionNotice(.info, "Transcription session ended", duration: 4))
-            self.stopAndProcess()
+            self.stopAndProcess(reason: "time limit")
         }
     }
 
@@ -247,7 +247,7 @@ public final class SessionCoordinator {
                 if lvl > 0.25 { heardSpeech = true; quietSince = nil }
                 else if heardSpeech {
                     if quietSince == nil { quietSince = Date() }
-                    else if Date().timeIntervalSince(quietSince!) > limit { self.stopAndProcess(); return }
+                    else if Date().timeIntervalSince(quietSince!) > limit { self.stopAndProcess(reason: "silence"); return }
                 }
             }
         }
@@ -283,8 +283,9 @@ public final class SessionCoordinator {
         preview = nil
     }
 
-    public func stopAndProcess() {
+    public func stopAndProcess(reason: String = "user") {
         guard state == .armed || state == .recording else { return }
+        if reason != "user" { Log.file("session", "stopped (\(reason))") }
         armTimer?.cancel(); maxTimer?.cancel(); silenceTimer?.cancel()
         let wasArmed = state == .armed
         state = .stopping
@@ -406,7 +407,16 @@ public final class SessionCoordinator {
         // 5. Target at release + surrounding text
         state = .inserting
         let ctxSw = Stopwatch()
-        let releaseTarget = await FocusTracker.shared.snapshot(readBrowserURL: false) ?? targetAtKeyDown
+        var releaseTarget = await FocusTracker.shared.snapshot(readBrowserURL: false) ?? targetAtKeyDown
+        // Switched apps mid-dictation (⌘Tab, Space swipe, click): the text belongs where dictation started.
+        if mode != .scratchpad, let k = targetAtKeyDown, let r = releaseTarget, r.pid != k.pid {
+            if await FocusTracker.shared.refocus(k) {
+                Log.file("session", "returned to \(k.appName) from \(r.appName) to insert")
+                releaseTarget = k
+            } else {
+                Log.file("session", "could not return to \(k.appName); inserting into \(r.appName)")
+            }
+        }
         let finalTarget: FocusSnapshot? = {
             if let r = releaseTarget, let k = targetAtKeyDown, r.pid == k.pid, r.element == nil { return k }
             return releaseTarget
@@ -457,7 +467,7 @@ public final class SessionCoordinator {
         record = (try? Database.shared.save(record)) ?? record
         lastTranscript = record
         lastTimings = timings
-        Log.file("session", "done · \(timings.summary) · \"\(out.text.prefix(80))\"")
+        Log.file("session", "done → \(finalTarget?.appName ?? "?") [\(finalTarget?.role ?? "no element")] · \(timings.summary) · \"\(out.text.prefix(80))\"")
         Log.session.info("\(timings.summary)")
         state = .idle
         finishIdle()
@@ -587,11 +597,14 @@ public final class SessionCoordinator {
         }
     }
 
-    private func deviceChangedMidSession() {
+    private func deviceChangedMidSession(_ change: AudioCapture.DeviceChange) {
         guard state.isCapturing else { return }
+        // A format/route change on the same mic (e.g. Bluetooth profile switch, audio starting elsewhere) is not a disconnect:
+        // the engine has already restarted and keeps appending to the same recording.
+        guard change == .deviceLost else { return }
         let sofar = audio.snapshotSamples()
         show(SessionNotice(.warning, "Microphone disconnected", action: sofar.count > 8000 ? .insert("") : .none, duration: 8))
-        if sofar.count > 8000 { stopAndProcess() } else { cancel(silent: true) }
+        if sofar.count > 8000 { stopAndProcess(reason: "microphone lost") } else { cancel(silent: true) }
     }
 
     #if DEBUG
