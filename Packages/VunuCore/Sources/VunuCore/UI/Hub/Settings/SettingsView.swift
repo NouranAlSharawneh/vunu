@@ -185,6 +185,7 @@ struct SystemSettings: View {
             SettingRow(title: "Hands-free auto-stop", subtitle: "Stop after this much silence (0 = never)") {
                 Picker("", selection: $prefs.handsFreeSilenceStopSeconds) { Text("Never").tag(0.0); Text("5 s").tag(5.0); Text("8 s").tag(8.0); Text("15 s").tag(15.0) }.frame(width: 100)
             }
+            UpdateSettings()
             Text("Notifications").font(Fonts.ui(13, weight: .semibold)).foregroundStyle(HubColors.text).padding(.top, 12)
             ForEach(["Feature explainers", "Microphone warnings", "Paste problems"], id: \.self) { key in
                 SettingRow(title: key) { Toggle("", isOn: Binding(get: { prefs.isNotificationEnabled(key) }, set: { prefs.notificationsEnabled[key] = $0 })).toggleStyle(.switch) }
@@ -196,6 +197,38 @@ struct SystemSettings: View {
         }
         .confirmationDialog("Reset all settings and restart Vunu?", isPresented: $confirmReset) {
             Button("Reset & restart", role: .destructive) { prefs.resetAll(); AppController.relaunch() }
+        }
+    }
+}
+
+struct UpdateSettings: View {
+    @State private var prefs = Preferences.shared
+    private var updater: Updater { Updater.shared }
+    var body: some View {
+        SettingRow(title: "Automatically check for updates", subtitle: "Once a day, asks GitHub for the latest release. Nothing else is sent.") {
+            Toggle("", isOn: $prefs.automaticUpdateChecks).toggleStyle(.switch).onChange(of: prefs.automaticUpdateChecks) { _, _ in updater.startAutomaticChecks() }
+        }
+        SettingRow(title: "Version \(Updater.currentVersion)", subtitle: statusText) {
+            if let r = updater.available {
+                HStack(spacing: 8) {
+                    Button("Release notes") { NSWorkspace.shared.open(r.pageURL) }.buttonStyle(SecondaryButtonStyle())
+                    Button("Install \(r.version) & relaunch") { Task { await updater.install(r) } }.buttonStyle(PrimaryButtonStyle())
+                }
+            } else {
+                Button(updater.status == .checking ? "Checking…" : "Check for updates") { Task { await updater.check(userInitiated: true) } }
+                    .buttonStyle(SecondaryButtonStyle()).disabled(updater.status == .checking)
+            }
+        }
+    }
+    private var statusText: String {
+        switch updater.status {
+        case .idle: updater.lastChecked == nil ? "Updates come from GitHub Releases" : "Up to date"
+        case .checking: "Checking GitHub…"
+        case .upToDate: "You're on the latest version"
+        case .available(let r): "Vunu \(r.version) is available"
+        case .downloading: "Downloading…"
+        case .installing: "Installing — Vunu will relaunch"
+        case .failed(let m): m
         }
     }
 }

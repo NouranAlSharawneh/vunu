@@ -34,6 +34,7 @@ public final class AppController {
         if arguments.contains("--benchmark") { Task { try? await Task.sleep(for: .seconds(3)); await runBenchmarkToLog() } }
         if arguments.contains("--hub") { HubWindowController.shared.show() }
         AudioStore.collectGarbage(retention: Preferences.shared.audioRetention)
+        Updater.shared.startAutomaticChecks()
     }
 
     private func afterOnboarding() {

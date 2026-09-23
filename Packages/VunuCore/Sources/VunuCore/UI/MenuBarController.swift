@@ -147,6 +147,11 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
         m.addItem(.separator())
         m.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         m.addItem(withTitle: "Help", action: #selector(openHelp), keyEquivalent: "").target = self
+        if let r = Updater.shared.available {
+            m.addItem(withTitle: "Install Vunu \(r.version) and Relaunch", action: #selector(installUpdate), keyEquivalent: "").target = self
+        } else {
+            m.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
+        }
         m.addItem(.separator())
         m.addItem(withTitle: "Quit Vunu", action: #selector(quit), keyEquivalent: "q").target = self
         return m
@@ -160,6 +165,12 @@ public final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func copyLast() { Task { await SessionCoordinator.shared.copyLast() } }
     @objc private func toggleBar() { Preferences.shared.showFlowBarAlways.toggle() }
     @objc private func quit() { NSApp.terminate(nil) }
+    @objc private func installUpdate() { if let r = Updater.shared.available { Task { await Updater.shared.install(r) } } }
+    @objc private func checkForUpdates() {
+        onOpenSettings?()
+        HubState.shared.settingsSection = .system
+        Task { await Updater.shared.check(userInitiated: true) }
+    }
 }
 
 /// Shared submenus used by the status item and the Flow Bar context menu.
