@@ -15,6 +15,7 @@ public final class AudioCapture: @unchecked Sendable {
     private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var targetFormat: AVAudioFormat!
+    private var tapFormat: AVAudioFormat?
     private var deviceUID: String?
     private var currentDeviceID: AudioDeviceID?
     private var configWork: DispatchWorkItem?
@@ -130,6 +131,7 @@ public final class AudioCapture: @unchecked Sendable {
             input.removeTap(onBus: 0)
             throw startError
         }
+        tapFormat = hw
         let now = ProcessInfo.processInfo.systemUptime
         state.withLock { $0.engineRunning = true; $0.discardUntil = now + 0.04 }
         if configObserver == nil {
@@ -144,6 +146,11 @@ public final class AudioCapture: @unchecked Sendable {
     private static func formatsAgree(_ input: AVAudioInputNode) -> Bool {
         let out = input.outputFormat(forBus: 0), hwIn = input.inputFormat(forBus: 0)
         return out.sampleRate > 0 && out.channelCount > 0 && out.sampleRate == hwIn.sampleRate
+    }
+
+    private static func hardwareMatches(_ input: AVAudioInputNode, _ format: AVAudioFormat) -> Bool {
+        let hwIn = input.inputFormat(forBus: 0)
+        return hwIn.sampleRate == format.sampleRate && hwIn.channelCount == format.channelCount
     }
 
     public func stop() {
@@ -164,6 +171,7 @@ public final class AudioCapture: @unchecked Sendable {
         configObserver = nil
         engine = AVAudioEngine()
         converter = nil
+        tapFormat = nil
         currentDeviceID = nil
     }
 
@@ -181,11 +189,25 @@ public final class AudioCapture: @unchecked Sendable {
         configWork = nil
         let (recording, monitoring) = state.withLock { ($0.recording, $0.monitoring > 0) }
         let lost = currentDeviceID.map { !AudioDevices.deviceExists($0) } ?? false
-        teardownLocked()
         guard recording || monitoring else {
+            teardownLocked()
             Log.file("audio", "configuration changed while idle; engine released")
             return
         }
+        // Assigning the input device on a fresh engine posts a configuration change of its own once it starts (macOS 27).
+        // Rebuilding the engine for it assigns the device again and loops forever with no audio, so keep the same engine
+        // when the device and its format are unchanged; only rebuild for a real route change.
+        if !lost, let tapFormat, Self.hardwareMatches(engine.inputNode, tapFormat) {
+            if engine.isRunning { return }
+            do {
+                try startLocked()
+                Log.file("audio", "configuration changed; same engine restarted")
+                return
+            } catch {
+                Log.file("audio", "same-engine restart failed, rebuilding: \(error)")
+            }
+        }
+        teardownLocked()
         do {
             try startLocked()
             Log.file("audio", "configuration changed\(lost ? " (device lost)" : ""); engine restarted")
