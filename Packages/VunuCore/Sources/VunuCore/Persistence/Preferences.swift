@@ -108,6 +108,7 @@ public final class Preferences {
         whisperMode = d.bool(forKey: "whisperMode")
         handsFreeSilenceStopSeconds = d.object(forKey: "handsFreeSilenceStopSeconds") as? Double ?? 8
         flowBarPosition = d.string(forKey: "flowBarPosition")
+        flowBarAnchor = d.string(forKey: "flowBarAnchor")
         hideFlowBarUntil = d.object(forKey: "hideFlowBarUntil") as? Date
         stylesByCategory = Self.decode([AppCategory: WritingStyle].self, d.data(forKey: "stylesByCategory")) ?? [:]
         extraAppsByCategory = Self.decode([AppCategory: [String]].self, d.data(forKey: "extraAppsByCategory")) ?? [:]
@@ -148,7 +149,10 @@ public final class Preferences {
     public var pressEnterExplained: Bool { didSet { d.set(pressEnterExplained, forKey: "pressEnterExplained") } }
     public var whisperMode: Bool { didSet { d.set(whisperMode, forKey: "whisperMode") } }
     public var handsFreeSilenceStopSeconds: Double { didSet { d.set(handsFreeSilenceStopSeconds, forKey: "handsFreeSilenceStopSeconds") } }
+    /// Legacy (≤ 0.3.x): origin of the idle-size Flow Bar window. Migrated to `flowBarAnchor`.
     public var flowBarPosition: String? { didSet { d.set(flowBarPosition, forKey: "flowBarPosition") } }
+    /// "x,y": bottom-center of the Flow Bar pill area in screen coordinates.
+    public var flowBarAnchor: String? { didSet { d.set(flowBarAnchor, forKey: "flowBarAnchor") } }
     public var hideFlowBarUntil: Date? { didSet { d.set(hideFlowBarUntil, forKey: "hideFlowBarUntil") } }
     public var stylesByCategory: [AppCategory: WritingStyle] { didSet { d.set(Self.encode(stylesByCategory), forKey: "stylesByCategory") } }
     public var extraAppsByCategory: [AppCategory: [String]] { didSet { d.set(Self.encode(extraAppsByCategory), forKey: "extraAppsByCategory") } }

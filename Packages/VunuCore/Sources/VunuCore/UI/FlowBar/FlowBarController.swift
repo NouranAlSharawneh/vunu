@@ -3,17 +3,29 @@ import SwiftUI
 import Observation
 
 /// Owns the Flow Bar panel + the notice toast panel; positions them on the screen of the focused window.
+///
+/// The panel is a fixed-size transparent canvas; only the SwiftUI pill inside it changes size. Resizing the window per state
+/// clipped the pill's left edge while its spring animation caught up (the window snapped narrower and re-centered first).
+/// Mouse events pass through the canvas except over the visible content.
 @MainActor
 public final class FlowBarController {
     public static let shared = FlowBarController()
+    /// Room for the widest content: the live preview (≤ 360 pt), the "taking longer" banner and the pill, plus the shadow.
+    static let canvasSize = CGSize(width: 420, height: 180)
+    /// Space under the content inside the canvas so the pill's shadow isn't clipped.
+    static let bottomInset: CGFloat = 8
     private let panel = FlowBarPanel()
     private let toast = ToastPanel()
-    private var hostingView: NSHostingView<AnyView>?
     private var observation: Task<Void, Never>?
     private var hideTimer: Task<Void, Never>?
     public var onOpenSettings: (() -> Void)?
     public var onOpenHistory: (() -> Void)?
-    private var customOrigin: CGPoint?
+    /// User-chosen spot: bottom-center of the content (the old idle window's bottom-center), screen coordinates.
+    private var customAnchor: CGPoint?
+    /// Visible content (pill + preview/banner) in the hosting view's top-left coordinates.
+    private var contentRect: CGRect = .zero
+    private var mouseMonitor: Any?
+    private var hoverPoll: Timer?
 
     private init() {
         let view = FlowBarView(
@@ -25,15 +37,33 @@ public final class FlowBarController {
             languages: Preferences.shared.languages,
             onPickLanguage: { lang in var l = Preferences.shared.languages; l.removeAll { $0 == lang }; l.insert(lang, at: 0); Preferences.shared.languages = l }
         )
-        let host = NSHostingView(rootView: AnyView(view))
-        host.sizingOptions = [.intrinsicContentSize]
+        let canvas = FlowBarCanvas(bottomInset: Self.bottomInset, onContentRect: { [weak self] rect in self?.contentRectChanged(rect) }) { view }
+        let host = NSHostingView(rootView: AnyView(canvas))
+        host.sizingOptions = []
         panel.contentView = host
-        hostingView = host
+        panel.setContentSize(Self.canvasSize)
+        panel.ignoresMouseEvents = true
         panel.onRightClick = { [weak self] e in self?.showMenu(e) }
         panel.onDragEnded = { [weak self] in self?.persistPosition() }
-        if let saved = Preferences.shared.flowBarPosition { let parts = saved.split(separator: ","); if parts.count == 2, let x = Double(parts[0]), let y = Double(parts[1]) { customOrigin = CGPoint(x: x, y: y) } }
+        customAnchor = Self.loadAnchor()
         applySharingType()
         observe()
+    }
+
+    private static func parse(_ s: String?) -> CGPoint? {
+        guard let parts = s?.split(separator: ","), parts.count == 2, let x = Double(parts[0]), let y = Double(parts[1]) else { return nil }
+        return CGPoint(x: x, y: y)
+    }
+
+    /// Reads the saved anchor, migrating the ≤ 0.3.x value (origin of the 128×43 idle window) to its bottom-center.
+    private static func loadAnchor() -> CGPoint? {
+        let prefs = Preferences.shared
+        if let a = parse(prefs.flowBarAnchor) { return a }
+        guard let old = parse(prefs.flowBarPosition) else { return nil }
+        let a = CGPoint(x: old.x + 64, y: old.y)
+        prefs.flowBarAnchor = "\(Int(a.x)),\(Int(a.y))"
+        prefs.flowBarPosition = nil
+        return a
     }
 
     private func observe() {
@@ -68,22 +98,73 @@ public final class FlowBarController {
         let shouldShow = !hidden && (s.state.isActive || (prefs.showFlowBarAlways && !s.state.isProcessing && s.state != .idle) || prefs.showFlowBarAlways)
         if shouldShow {
             hideTimer?.cancel()
-            position(panel, aboveBottomBy: 24)
+            position()
             if !panel.isVisible { panel.alphaValue = 1; panel.orderFrontRegardless() }
+            startMouseTracking()
         } else if panel.isVisible {
             hideTimer?.cancel()
             hideTimer = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(s.state == .idle ? 250 : 0))
                 guard !Task.isCancelled, let self else { return }
                 NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.2; self.panel.animator().alphaValue = 0 } completionHandler: {
-                    Task { @MainActor in if !SessionCoordinator.shared.state.isActive && !Preferences.shared.showFlowBarAlways { self.panel.orderOut(nil) }; self.panel.alphaValue = 1 }
+                    Task { @MainActor in
+                        if !SessionCoordinator.shared.state.isActive && !Preferences.shared.showFlowBarAlways { self.panel.orderOut(nil); self.stopMouseTracking() }
+                        self.panel.alphaValue = 1
+                    }
                 }
             }
         }
         // toast
         if let n = s.notice {
-            toast.show(n, near: panel.isVisible ? panel.frame : nil, screen: targetScreen())
+            toast.show(n, near: panel.isVisible ? contentScreenRect : nil, screen: targetScreen())
         } else { toast.hide() }
+    }
+
+    /// The visible content in screen coordinates.
+    private var contentScreenRect: CGRect {
+        let f = panel.frame
+        return CGRect(x: f.minX + contentRect.minX, y: f.minY + f.height - contentRect.maxY, width: contentRect.width, height: contentRect.height)
+    }
+
+    private func contentRectChanged(_ rect: CGRect) {
+        guard rect != contentRect else { return }
+        contentRect = rect
+        if panel.isVisible, let n = SessionCoordinator.shared.notice { toast.show(n, near: contentScreenRect, screen: targetScreen()) }
+        updateMousePassThrough()
+    }
+
+    // MARK: click-through
+
+    /// A global monitor sees the cursor reach the content while the canvas ignores the mouse; once the canvas takes
+    /// events (and the monitor goes quiet), a 30 Hz poll notices the cursor leaving.
+    private func startMouseTracking() {
+        guard mouseMonitor == nil else { return }
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { [weak self] _ in
+            MainActor.assumeIsolated { self?.updateMousePassThrough() }
+        }
+        updateMousePassThrough()
+    }
+
+    private func stopMouseTracking() {
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        mouseMonitor = nil
+        hoverPoll?.invalidate(); hoverPoll = nil
+        panel.ignoresMouseEvents = true
+    }
+
+    private func updateMousePassThrough() {
+        let over = panel.isVisible && !contentRect.isEmpty && contentScreenRect.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation)
+        if over || panel.isDragging {
+            if panel.ignoresMouseEvents { panel.ignoresMouseEvents = false }
+            if hoverPoll == nil {
+                let t = Timer(timeInterval: 1.0 / 30, repeats: true) { [weak self] _ in MainActor.assumeIsolated { self?.updateMousePassThrough() } }
+                RunLoop.main.add(t, forMode: .common)
+                hoverPoll = t
+            }
+        } else {
+            if !panel.ignoresMouseEvents { panel.ignoresMouseEvents = true }
+            hoverPoll?.invalidate(); hoverPoll = nil
+        }
     }
 
     /// Screen containing the focused window (fallback: main).
@@ -97,34 +178,27 @@ public final class FlowBarController {
         return NSScreen.main ?? NSScreen.screens[0]
     }
 
-    private func position(_ p: NSPanel, aboveBottomBy: CGFloat) {
-        p.contentView?.layoutSubtreeIfNeeded()
-        let size = hostingView?.fittingSize ?? p.frame.size
-        p.setContentSize(size)
-        let screen = targetScreen()
-        let vf = screen.visibleFrame
-        var origin: CGPoint
-        if let c = customOrigin, vf.insetBy(dx: -20, dy: -20).contains(CGPoint(x: c.x + size.width / 2, y: c.y + size.height / 2)) {
-            origin = CGPoint(x: c.x + (c.x - c.x), y: c.y)
-            // keep centered on the pill's saved center when width changes
-            origin.x = c.x - (size.width - 128) / 2
-        } else {
-            origin = CGPoint(x: vf.midX - size.width / 2, y: vf.minY + aboveBottomBy)
-        }
-        origin.x = max(vf.minX, min(origin.x, vf.maxX - size.width))
-        origin.y = max(vf.minY, min(origin.y, vf.maxY - size.height))
-        p.setFrameOrigin(origin)
+    /// Only moves the canvas; it never resizes. The content sits bottom-center, `bottomInset` above the canvas bottom.
+    private func position() {
+        let vf = targetScreen().visibleFrame
+        var a: CGPoint
+        if let c = customAnchor, vf.insetBy(dx: -20, dy: -20).contains(c) { a = c } else { a = CGPoint(x: vf.midX, y: vf.minY + 24) }
+        // Keep the widest pill (~170 pt while recording) fully on screen; the transparent canvas may overhang.
+        let half: CGFloat = 90
+        a.x = max(vf.minX + half, min(a.x, vf.maxX - half))
+        a.y = max(vf.minY, min(a.y, vf.maxY - 60))
+        let origin = CGPoint(x: (a.x - Self.canvasSize.width / 2).rounded(), y: (a.y - Self.bottomInset).rounded())
+        if panel.frame.origin != origin { panel.setFrameOrigin(origin) }
     }
 
     private func persistPosition() {
         let f = panel.frame
-        // store the origin as if the pill were idle-width (128 incl. padding) so it stays centered across state widths
-        let idleOrigin = CGPoint(x: f.origin.x + (f.width - 128) / 2, y: f.origin.y)
-        customOrigin = idleOrigin
-        Preferences.shared.flowBarPosition = "\(Int(idleOrigin.x)),\(Int(idleOrigin.y))"
+        let a = CGPoint(x: f.midX, y: f.minY + Self.bottomInset)
+        customAnchor = a
+        Preferences.shared.flowBarAnchor = "\(Int(a.x)),\(Int(a.y))"
     }
 
-    public func resetPosition() { customOrigin = nil; Preferences.shared.flowBarPosition = nil; refresh() }
+    public func resetPosition() { customAnchor = nil; Preferences.shared.flowBarAnchor = nil; Preferences.shared.flowBarPosition = nil; refresh() }
 
     private func showMenu(_ event: NSEvent) {
         let menu = NSMenu()

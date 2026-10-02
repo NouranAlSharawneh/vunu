@@ -35,7 +35,7 @@ struct FlowBarView: View {
 
     private var pill: some View {
         ZStack {
-            Capsule().fill(Tokens.ink.opacity(0.92))
+            Capsule().fill(Tokens.ink.opacity(0.92)).shadow(color: .black.opacity(0.28), radius: 5, y: 2)
             Capsule().strokeBorder(session.mode == .commandMode && (isRecording || isProcessing) ? Tokens.lilac : Tokens.barBorder, lineWidth: session.mode == .commandMode && (isRecording || isProcessing) ? 1.5 : 1)
             HStack(spacing: 8) {
                 if isRecording || isProcessing {
@@ -118,5 +118,18 @@ struct FlowBarView: View {
     private func flashSuccess() {
         flash = true
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(120)); flash = false }
+    }
+}
+
+/// Fixed-size Flow Bar canvas: content bottom-centered, its rect reported for click-through and toast placement.
+struct FlowBarCanvas<Content: View>: View {
+    var bottomInset: CGFloat
+    var onContentRect: (CGRect) -> Void
+    @ViewBuilder var content: Content
+    var body: some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onContentRect($0) }
+            .padding(.bottom, bottomInset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 }
