@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import CoreAudio
+import Carbon.HIToolbox
 
 /// Wires everything together. Called from the thin app target's NSApplicationDelegate.
 @MainActor
@@ -65,6 +66,11 @@ public final class AppController {
         nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             Task { @MainActor in try? await Task.sleep(for: .seconds(2)); SessionCoordinator.shared.restartHotkeys(); Log.file("hotkeys", "tap restarted after wake") }
         }
+        // ⌘V's key code follows the keyboard layout (Dvorak, Arabic…).
+        KeySynth.refreshLayout()
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { KeySynth.refreshLayout() }
+        }
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { _ in
             Task { @MainActor in try? await Task.sleep(for: .seconds(1)); SessionCoordinator.shared.restartHotkeys() }
         }
@@ -98,6 +104,7 @@ public final class AppController {
     public func terminate() {
         SessionCoordinator.shared.tap?.stop()
         SessionCoordinator.shared.audio.stop()
+        ClipboardGuard.shared.finishNow()
         Log.file("app", "quit")
     }
 }

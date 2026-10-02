@@ -299,6 +299,11 @@ struct ToastView: View {
                 Button("No") { SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle(secondary: true))
                 Button("Add") { try? Database.shared.save(DictionaryEntry(word: word, misspelling: misspelling)); SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle())
             }
+        case .openPrivacyPaste:
+            Button("Open Settings") {
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") { NSWorkspace.shared.open(url) }
+                SessionCoordinator.shared.notice = nil
+            }.buttonStyle(ToastButtonStyle())
         case .recover:
             Button("Retry") { if let t = try? Database.shared.transcripts(limit: 1).first { SessionCoordinator.shared.retry(t) }; SessionCoordinator.shared.notice = nil }.buttonStyle(ToastButtonStyle())
         case .none: EmptyView()

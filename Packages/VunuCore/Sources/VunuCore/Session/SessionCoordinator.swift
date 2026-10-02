@@ -488,12 +488,12 @@ public final class SessionCoordinator {
         case .clipboardOnly(let reason):
             timings.insertPath = "clipboard(\(reason))"
             record.status = .done
-            show(SessionNotice(.warning, "Click a textbox and use ⌘⌃V to paste", action: .copy(out.text), duration: 6))
+            show(SessionNotice(.warning, "Click a text field and press ⌘V to paste", detail: "Your dictation is on the clipboard.", action: .copy(out.text), duration: 6))
         case .blocked(let reason):
             timings.insertPath = "blocked(\(reason))"
             record.status = .done
             await Inserter.shared.copyToClipboard(out.text)
-            show(SessionNotice(.warning, "Paste blocked", detail: "Vunu can't paste right now. Text saved to clipboard", action: .copy(out.text), duration: 6))
+            show(SessionNotice(.warning, "Paste blocked", detail: "Vunu can't paste here. Your dictation is on the clipboard — press ⌘V.", action: .copy(out.text), duration: 6))
         }
         record.timingsJSON = (try? JSONEncoder().encode(timings)).flatMap { String(data: $0, encoding: .utf8) }
         record = (try? Database.shared.save(record)) ?? record
