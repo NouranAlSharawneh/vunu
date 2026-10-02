@@ -92,11 +92,18 @@ struct MicrophonePicker: View {
     @State private var devices: [AudioInputDevice] = []
     @State private var showOthers = false
     @State private var detected: AudioInputDevice?
+    @State private var nowUsing: String?
+    private var micSubtitle: String {
+        let using = nowUsing.map { "Now using \($0). " } ?? ""
+        return prefs.preferredMicrophoneUID == nil
+            ? using + "Automatic uses your Mac's mic when Bluetooth headphones are connected, so music keeps full quality."
+            : using + "Built-in mic is recommended. Wireless mics can drop the first words."
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SettingRow(title: "Microphone", subtitle: "Built-in mic is recommended. Wireless mics can drop the first words.") {
-                Picker("", selection: Binding(get: { prefs.preferredMicrophoneUID ?? "" }, set: { prefs.preferredMicrophoneUID = $0.isEmpty ? nil : $0; SessionCoordinator.shared.applyMicrophonePreference() })) {
-                    Text("System default").tag("")
+            SettingRow(title: "Microphone", subtitle: micSubtitle) {
+                Picker("", selection: Binding(get: { prefs.preferredMicrophoneUID ?? "" }, set: { prefs.preferredMicrophoneUID = $0.isEmpty ? nil : $0; SessionCoordinator.shared.applyMicrophonePreference(); nowUsing = AudioDeviceCache.shared.currentChoice()?.device.name })) {
+                    Text("Automatic").tag("")
                     ForEach(devices) { d in Text(d.displayName + (d.isBluetooth ? " ⚠︎" : "")).tag(d.uid) }
                 }.labelsHidden().frame(maxWidth: 260, alignment: .trailing)
             }
@@ -118,10 +125,14 @@ struct MicrophonePicker: View {
         .onAppear(perform: reload)
         .onReceive(NotificationCenter.default.publisher(for: .vunuAudioDevicesChanged)) { _ in
             let before = Set(devices.map(\.uid)); reload()
-            if let new = devices.first(where: { !before.contains($0.uid) && $0.uid != prefs.preferredMicrophoneUID }) { detected = new }
+            // Don't offer Bluetooth/Continuity mics: switching to one puts headphones in call quality while dictating.
+            if let new = devices.first(where: { !before.contains($0.uid) && $0.uid != prefs.preferredMicrophoneUID && !$0.isRemote }) { detected = new }
         }
     }
-    private func reload() { devices = AudioDeviceCache.shared.inputDevices(includeVirtual: showOthers) }
+    private func reload() {
+        devices = AudioDeviceCache.shared.inputDevices(includeVirtual: showOthers)
+        nowUsing = AudioDeviceCache.shared.currentChoice()?.device.name
+    }
 }
 
 

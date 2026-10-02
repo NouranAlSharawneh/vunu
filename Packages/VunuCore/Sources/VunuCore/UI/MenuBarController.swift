@@ -179,7 +179,7 @@ enum MenuBuilders {
     static func microphoneMenu() -> NSMenu {
         let m = NSMenu()
         let current = Preferences.shared.preferredMicrophoneUID
-        let auto = NSMenuItem(title: "System default", action: #selector(MicMenuTarget.pick(_:)), keyEquivalent: "")
+        let auto = NSMenuItem(title: "Automatic", action: #selector(MicMenuTarget.pick(_:)), keyEquivalent: "")
         auto.target = MicMenuTarget.shared; auto.representedObject = ""; auto.state = current == nil ? .on : .off
         m.addItem(auto)
         for d in AudioDeviceCache.shared.inputDevices() {
