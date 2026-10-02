@@ -28,7 +28,7 @@ public final class SessionCoordinator {
     public let audio = AudioCapture()
     public let hotkeys: HotkeyEngine
     public private(set) var tap: EventTapMonitor?
-    private let muter = OutputMuter()
+    let muter = OutputMuter()
     private var armTimer: Task<Void, Never>?
     private var maxTimer: Task<Void, Never>?
     private var silenceTimer: Task<Void, Never>?
@@ -225,7 +225,7 @@ public final class SessionCoordinator {
         // The ping means "talk now". Wait until the mic is running, and for a Bluetooth mic (1–3 s to switch to its call profile)
         // until it really hears.
         if micStarted && (!micIsBluetooth || micReady) { Sounds.shared.playPing() } else { pingPending = true; micConnecting = micIsBluetooth }
-        if Preferences.shared.muteMusicWhileDictating { muter.muteIfPlaying() }
+        if Preferences.shared.muteMusicWhileDictating { muter.scheduleMute() }
         startMaxTimer()
         if mode == .handsFree { startSilenceWatch() }
         if Preferences.shared.livePreview { startPreview() }
@@ -302,7 +302,7 @@ public final class SessionCoordinator {
         let wasArmed = state == .armed
         state = .stopping
         stopPreview()
-        muter.restoreIfNeeded()
+        muter.restore()
         let samples = audio.endRecording()
         let duration = Double(samples.count) / AudioCapture.sampleRate
         let startMode = mode
@@ -323,7 +323,7 @@ public final class SessionCoordinator {
         armTimer?.cancel(); maxTimer?.cancel(); silenceTimer?.cancel()
         micConnecting = false; pingPending = false
         stopPreview()
-        muter.restoreIfNeeded()
+        muter.restore()
         let wasCapturing = state.isCapturing
         if state.isProcessing { processingTask?.cancel() }
         let samples = wasCapturing ? audio.endRecording() : []

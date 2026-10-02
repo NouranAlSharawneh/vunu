@@ -22,6 +22,7 @@ public final class AppController {
 
         let session = SessionCoordinator.shared
         if Permissions.microphoneGranted { session.applyMicrophonePreference() }
+        session.muter.restorePendingFromLastRun()
         if Permissions.accessibilityGranted {
             do { try session.startHotkeys() } catch { Log.hotkeys.error("tap start failed: \(error)"); Log.file("hotkeys", "tap start failed: \(error)") }
         }

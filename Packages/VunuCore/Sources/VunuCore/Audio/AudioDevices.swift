@@ -159,49 +159,161 @@ public enum AudioDevices {
     }
 
     // MARK: output mute / volume (used only when "Mute music while dictating" is on)
-    public static func isOutputRunningSomewhere(_ id: AudioDeviceID) -> Bool {
-        (getData(id, address(kAudioDevicePropertyDeviceIsRunningSomewhere), UInt32(0)) ?? 0) != 0
+
+    static func uid(of id: AudioDeviceID) -> String? { getString(id, address(kAudioDevicePropertyDeviceUID)) }
+
+    static func deviceID(forUID uid: String) -> AudioDeviceID? {
+        var addr = address(kAudioHardwarePropertyTranslateUIDToDevice)
+        var cfUID = uid as CFString
+        var id = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let st = withUnsafeMutablePointer(to: &cfUID) { q in
+            AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, UInt32(MemoryLayout<CFString>.size), q, &size, &id)
+        }
+        return st == noErr && id != kAudioObjectUnknown ? id : nil
     }
-    public static func outputMute(_ id: AudioDeviceID) -> Bool? {
-        getData(id, address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput), UInt32(0)).map { $0 != 0 }
+
+    private static func outputAddress(_ selector: AudioObjectPropertySelector, _ element: UInt32) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeOutput, mElement: element)
     }
-    @discardableResult public static func setOutputMute(_ id: AudioDeviceID, _ mute: Bool) -> Bool {
-        var a = address(kAudioDevicePropertyMute, kAudioObjectPropertyScopeOutput)
-        var v: UInt32 = mute ? 1 : 0
-        return AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v) == noErr
+    static func isSettable(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector, _ element: UInt32) -> Bool {
+        var a = outputAddress(selector, element)
+        guard AudioObjectHasProperty(id, &a) else { return false }
+        var settable: DarwinBoolean = false
+        return AudioObjectIsPropertySettable(id, &a, &settable) == noErr && settable.boolValue
     }
-    public static func outputVolume(_ id: AudioDeviceID) -> Float? {
-        getData(id, address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput), Float(0))
+    /// Mute (0/1) or volume scalar (0…1) as a Float.
+    static func outputValue(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector, _ element: UInt32) -> Float? {
+        if selector == kAudioDevicePropertyMute { return getData(id, outputAddress(selector, element), UInt32(0)).map { Float($0) } }
+        return getData(id, outputAddress(selector, element), Float(0))
     }
-    @discardableResult public static func setOutputVolume(_ id: AudioDeviceID, _ volume: Float) -> Bool {
-        var a = address(kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput)
-        var v = volume
+    @discardableResult static func setOutputValue(_ id: AudioDeviceID, _ selector: AudioObjectPropertySelector, _ element: UInt32, _ value: Float) -> Bool {
+        var a = outputAddress(selector, element)
+        if selector == kAudioDevicePropertyMute {
+            var v: UInt32 = value != 0 ? 1 : 0
+            return AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &v) == noErr
+        }
+        var v = value
         return AudioObjectSetPropertyData(id, &a, 0, nil, UInt32(MemoryLayout<Float>.size), &v) == noErr
+    }
+
+    /// PIDs of processes currently producing audio output, excluding `excludingPID` (Vunu's own ping must not count).
+    public static func processesPlayingOutput(excludingPID: pid_t) -> [pid_t] {
+        var addr = address(kAudioHardwarePropertyProcessObjectList)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var objects = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &objects) == noErr else { return [] }
+        return objects.compactMap { obj -> pid_t? in
+            guard (getData(obj, address(kAudioProcessPropertyIsRunningOutput), UInt32(0)) ?? 0) != 0,
+                  let pid = getData(obj, address(kAudioProcessPropertyPID), pid_t(0)), pid != excludingPID else { return nil }
+            return pid
+        }
     }
 }
 
-/// Mutes the default output device during a dictation and restores the exact previous state.
-/// Only acts when audio is actually playing and never overrides a user-set mute.
+/// "Mute music while dictating" (opt-in). Modeled on Wispr Flow's behaviour:
+/// - mutes the default output only when another app is actually playing (Vunu's own start ping doesn't count), 250 ms after
+///   recording starts so the ping is still heard;
+/// - remembers the device by UID and the exact previous value of each control it changed (mute, else volume; main element,
+///   else channels 1/2), and puts back only values that are still what it set — a change the user made wins;
+/// - retries the restore at 0.5, 1.5 and 3.5 s while a Bluetooth headset settles, and gives up if the device is gone;
+/// - persists the pending restore so a crash or quit can't leave music muted (applied at the next launch).
+/// All Core Audio calls run on its own queue, never the main thread.
 public final class OutputMuter: @unchecked Sendable {
-    private var restore: (() -> Void)?
-    private let lock = NSLock()
+    struct Change: Codable, Equatable { let selector: UInt32; let element: UInt32; let previous: Float; let applied: Float }
+    struct Record: Codable, Equatable { let uid: String; var changes: [Change] }
+
+    private static let defaultsKey = "pendingOutputRestore"
+    private let queue = DispatchQueue(label: "dev.nunu.vunu.muter", qos: .userInitiated)
+    private var record: Record?                 // queue only
+    private var muteWork: DispatchWorkItem?     // queue only
+    private var restoreGen = 0                  // queue only
+
     public init() {}
 
-    public func muteIfPlaying() {
-        lock.lock(); defer { lock.unlock() }
-        guard restore == nil, let out = AudioDevices.defaultOutputDeviceID(), AudioDevices.isOutputRunningSomewhere(out) else { return }
-        if let muted = AudioDevices.outputMute(out) {
-            guard !muted else { return } // user-set mute → leave alone
-            if AudioDevices.setOutputMute(out, true) { restore = { AudioDevices.setOutputMute(out, false) }; Log.audio.info("output muted"); return }
-        }
-        if let vol = AudioDevices.outputVolume(out), vol > 0, AudioDevices.setOutputVolume(out, 0) {
-            restore = { AudioDevices.setOutputVolume(out, vol) }
-            Log.audio.info("output volume set to 0 (was \(vol))")
+    /// Mute in 250 ms unless the dictation ends first.
+    public func scheduleMute() {
+        queue.async { [self] in
+            muteWork?.cancel()
+            restoreGen += 1   // a restore still retrying for the previous dictation stops; its record is reused
+            let work = DispatchWorkItem { [weak self] in self?.muteNow() }
+            muteWork = work
+            queue.asyncAfter(deadline: .now() + 0.25, execute: work)
         }
     }
 
-    public func restoreIfNeeded() {
-        lock.lock(); defer { lock.unlock() }
-        restore?(); restore = nil
+    public func restore() {
+        queue.async { [self] in
+            muteWork?.cancel(); muteWork = nil
+            guard record != nil else { return }
+            restoreGen += 1
+            attemptRestore(gen: restoreGen, attempt: 0)
+        }
+    }
+
+    /// Launch: put back what a previous run muted if it never got to (crash, force quit).
+    public func restorePendingFromLastRun() {
+        queue.async { [self] in
+            guard record == nil, let data = UserDefaults.standard.data(forKey: Self.defaultsKey),
+                  let r = try? JSONDecoder().decode(Record.self, from: data) else { return }
+            Log.file("audio", "restoring output left muted by the last run")
+            record = r
+            restoreGen += 1
+            attemptRestore(gen: restoreGen, attempt: 0)
+        }
+    }
+
+    private func muteNow() {
+        muteWork = nil
+        guard record == nil else { return }   // still muted from the previous dictation (restore pending): keep that record
+        let playing = AudioDevices.processesPlayingOutput(excludingPID: getpid())
+        guard !playing.isEmpty, let out = AudioDevices.defaultOutputDeviceID(), let uid = AudioDevices.uid(of: out) else { return }
+        var changes: [Change] = []
+        // Prefer mute (exact on/off restore); fall back to volume. Main element first, else the stereo channels.
+        for selector in [kAudioDevicePropertyMute, kAudioDevicePropertyVolumeScalar] where changes.isEmpty {
+            let target: Float = selector == kAudioDevicePropertyMute ? 1 : 0
+            for element in [kAudioObjectPropertyElementMain, 1, 2] as [UInt32] {
+                guard AudioDevices.isSettable(out, selector, element), let current = AudioDevices.outputValue(out, selector, element) else { continue }
+                if current == target { return }   // already silent (muted or volume 0): the user did that, leave it alone
+                if AudioDevices.setOutputValue(out, selector, element, target) {
+                    changes.append(Change(selector: selector, element: element, previous: current, applied: target))
+                }
+                if element == kAudioObjectPropertyElementMain { break }
+            }
+        }
+        guard !changes.isEmpty else { return }
+        let r = Record(uid: uid, changes: changes)
+        record = r
+        if let data = try? JSONEncoder().encode(r) { UserDefaults.standard.set(data, forKey: Self.defaultsKey) }
+        Log.file("audio", "output muted for dictation (\(AudioDevices.describe(out)); \(changes.count) control\(changes.count == 1 ? "" : "s"))")
+    }
+
+    private func attemptRestore(gen: Int, attempt: Int) {
+        guard gen == restoreGen, var r = record else { return }
+        guard let id = AudioDevices.deviceID(forUID: r.uid) else {
+            finish("output device gone; nothing to restore")
+            return
+        }
+        var remaining: [Change] = []
+        for c in r.changes {
+            guard let current = AudioDevices.outputValue(id, c.selector, c.element) else { remaining.append(c); continue }
+            if current != c.applied { continue }   // changed by the user (or already restored): theirs wins
+            if !AudioDevices.setOutputValue(id, c.selector, c.element, c.previous) || AudioDevices.outputValue(id, c.selector, c.element) != c.previous {
+                remaining.append(c)
+            }
+        }
+        if remaining.isEmpty { finish("output restored"); return }
+        r.changes = remaining
+        record = r
+        let delays: [Double] = [0.5, 1.0, 2.0]   // → attempts at 0.5, 1.5 and 3.5 s
+        guard attempt < delays.count else { finish("output restore gave up after retries"); return }
+        queue.asyncAfter(deadline: .now() + delays[attempt]) { [weak self] in self?.attemptRestore(gen: gen, attempt: attempt + 1) }
+    }
+
+    private func finish(_ message: String) {
+        record = nil
+        UserDefaults.standard.removeObject(forKey: Self.defaultsKey)
+        Log.file("audio", message)
     }
 }
