@@ -15,7 +15,7 @@ final class ClipboardGuardTests: XCTestCase {
     override func tearDown() async throws { pb.releaseGlobally() }
 
     private func makeGuard(cap: Duration = .seconds(8)) -> ClipboardGuard {
-        ClipboardGuard(pasteboard: pb, cap: cap, postPaste: { [weak self] in self?.posted += 1; return (9, 0) })
+        ClipboardGuard(pasteboard: pb, cap: cap, postPaste: { [weak self] stamp in stamp(); self?.posted += 1; return (9, 0) })
     }
     private func copy(_ s: String) { pb.clearContents(); pb.setString(s, forType: .string) }
     private func wait(_ ms: Int) async { try? await Task.sleep(for: .milliseconds(ms)) }
@@ -71,6 +71,18 @@ final class ClipboardGuardTests: XCTestCase {
         _ = await g.paste("dictation", minHold: .milliseconds(200))
         await wait(1_000)
         XCTAssertEqual(pb.string(forType: .string), "old")
+    }
+
+    func testEarlyReadDoesNotShortenTheHoldForEnterOrTheNextDictation() async {
+        // A clipboard manager reading right after ⌘V must not let "press enter" / the next paste go before a slow target.
+        copy("old")
+        let g = makeGuard()
+        _ = await g.paste("dictation", minHold: .milliseconds(700))
+        _ = pb.string(forType: .string)
+        let clock = ContinuousClock()
+        let start = clock.now
+        await g.waitForSafePoint()
+        XCTAssertGreaterThanOrEqual(clock.now - start, .milliseconds(600))
     }
 
     func testFinishNowRestoresImmediately() async {

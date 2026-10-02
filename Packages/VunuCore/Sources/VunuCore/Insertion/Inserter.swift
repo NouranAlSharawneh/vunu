@@ -63,7 +63,7 @@ public actor Inserter {
         var last: ClipboardGuard.Delivery?
         let clock = ContinuousClock()
         let start = clock.now
-        for piece in pieces { last = await guardian.paste(piece, minHold: hold) }   // each waits for the previous chunk's read
+        for (i, piece) in pieces.enumerated() { last = await guardian.paste(piece, minHold: hold, chunk: i > 0) }   // a chunk waits for the previous one's read
         if pressEnter {
             await guardian.waitForSafePoint()   // Return only after the target took the text
             KeySynth.returnKey()

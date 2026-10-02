@@ -154,6 +154,19 @@ public enum AudioDevices {
         return "\(name) [\(transport(id).rawValue)]"
     }
 
+    /// Nominal sample rate and input channel count, to tell a real format change from a notification that changed nothing.
+    static func inputFormat(_ id: AudioDeviceID) -> (rate: Double, channels: Int)? {
+        guard let rate = getData(id, address(kAudioDevicePropertyNominalSampleRate), Float64(0)) else { return nil }
+        var addr = address(kAudioDevicePropertyStreamConfiguration, kAudioObjectPropertyScopeInput)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return (rate, 0) }
+        let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size), alignment: MemoryLayout<AudioBufferList>.alignment)
+        defer { raw.deallocate() }
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return (rate, 0) }
+        let channels = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self)).reduce(0) { $0 + Int($1.mNumberChannels) }
+        return (rate, channels)
+    }
+
     public static func deviceExists(_ id: AudioDeviceID) -> Bool {
         (getData(id, address(kAudioDevicePropertyDeviceIsAlive), UInt32(0)) ?? 0) != 0
     }
@@ -252,6 +265,17 @@ public final class OutputMuter: @unchecked Sendable {
         }
     }
 
+    /// App quit: one bounded restore attempt (≤ 0.5 s). Anything left is applied at the next launch.
+    public func restoreBeforeQuit() {
+        let done = DispatchSemaphore(value: 0)
+        queue.async { [self] in
+            muteWork?.cancel(); muteWork = nil
+            if record != nil { restoreGen += 1; attemptRestore(gen: restoreGen, attempt: 0, retry: false) }
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + 0.5)
+    }
+
     /// Launch: put back what a previous run muted if it never got to (crash, force quit).
     public func restorePendingFromLastRun() {
         queue.async { [self] in
@@ -289,7 +313,7 @@ public final class OutputMuter: @unchecked Sendable {
         Log.file("audio", "output muted for dictation (\(AudioDevices.describe(out)); \(changes.count) control\(changes.count == 1 ? "" : "s"))")
     }
 
-    private func attemptRestore(gen: Int, attempt: Int) {
+    private func attemptRestore(gen: Int, attempt: Int, retry: Bool = true) {
         guard gen == restoreGen, var r = record else { return }
         guard let id = AudioDevices.deviceID(forUID: r.uid) else {
             finish("output device gone; nothing to restore")
@@ -306,6 +330,8 @@ public final class OutputMuter: @unchecked Sendable {
         if remaining.isEmpty { finish("output restored"); return }
         r.changes = remaining
         record = r
+        if let data = try? JSONEncoder().encode(r) { UserDefaults.standard.set(data, forKey: Self.defaultsKey) }
+        guard retry else { Log.file("audio", "output not fully restored at quit; will retry at next launch"); return }
         let delays: [Double] = [0.5, 1.0, 2.0]   // → attempts at 0.5, 1.5 and 3.5 s
         guard attempt < delays.count else { finish("output restore gave up after retries"); return }
         queue.asyncAfter(deadline: .now() + delays[attempt]) { [weak self] in self?.attemptRestore(gen: gen, attempt: attempt + 1) }

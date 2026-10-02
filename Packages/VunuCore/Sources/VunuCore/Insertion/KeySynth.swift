@@ -26,9 +26,11 @@ public enum KeySynth {
     /// ⌘V for the current layout. Waits (≤ 1 s) for held modifiers to be released, then holds the key ~15 ms: some systems
     /// drop chords released instantly, and a still-held ⌥ or ⌃ would turn it into a different shortcut. ⌘ rides on the V
     /// events' flags rather than separate ⌘ key events, so ⌘ can never be left stuck down.
-    public static func paste() async -> (keyCode: CGKeyCode, waitedMs: Int) {
+    /// `beforeKeyDown` runs right before the key is posted (after the modifier wait), to time-stamp the paste.
+    public static func paste(beforeKeyDown: @Sendable () -> Void = {}) async -> (keyCode: CGKeyCode, waitedMs: Int) {
         let waited = await waitForModifiersReleased(timeout: .seconds(1))
         let key = vKey.withLock { $0 }
+        beforeKeyDown()
         post(keyCode: key, flags: .maskCommand, down: true)
         await sleep(.milliseconds(15))
         post(keyCode: key, flags: .maskCommand, down: false)

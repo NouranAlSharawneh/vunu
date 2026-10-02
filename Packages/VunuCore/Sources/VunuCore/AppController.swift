@@ -105,6 +105,7 @@ public final class AppController {
     public func terminate() {
         SessionCoordinator.shared.tap?.stop()
         SessionCoordinator.shared.audio.stop()
+        SessionCoordinator.shared.muter.restoreBeforeQuit()
         ClipboardGuard.shared.finishNow()
         Log.file("app", "quit")
     }

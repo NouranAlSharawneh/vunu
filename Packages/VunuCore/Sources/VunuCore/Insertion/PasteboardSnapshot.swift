@@ -111,11 +111,12 @@ public final class ClipboardGuard {
     static let quietGap: Duration = .milliseconds(250)
     /// Longest the dictation stays on the clipboard when no read is seen.
     private let cap: Duration
-    /// Posts ⌘V (injectable so tests never type into the frontmost app).
-    private let postPaste: @MainActor () async -> (keyCode: CGKeyCode, waitedMs: Int)
+    /// Posts ⌘V, calling its argument right before the key-down (injectable so tests never type into the frontmost app).
+    typealias PostPaste = @MainActor (_ beforeKeyDown: @escaping @Sendable () -> Void) async -> (keyCode: CGKeyCode, waitedMs: Int)
+    private let postPaste: PostPaste
 
     init(pasteboard: NSPasteboard = .general, cap: Duration = .seconds(8),
-         postPaste: @escaping @MainActor () async -> (keyCode: CGKeyCode, waitedMs: Int) = { await KeySynth.paste() }) {
+         postPaste: @escaping PostPaste = { stamp in await KeySynth.paste(beforeKeyDown: stamp) }) {
         pb = pasteboard
         self.cap = cap
         self.postPaste = postPaste
@@ -129,8 +130,8 @@ public final class ClipboardGuard {
     }
 
     /// Writes `text`, posts ⌘V, and schedules the restore. Returns once ⌘V is posted.
-    func paste(_ text: String, minHold: Duration) async -> Delivery {
-        await waitForSafePoint()
+    func paste(_ text: String, minHold: Duration, chunk: Bool = false) async -> Delivery {
+        await waitForSafePoint(strict: !chunk)
         // Keep the user's original clipboard if a restore is still pending and the clipboard is still ours.
         var snapshot: PasteboardSnapshot?
         var preserved = false
@@ -153,21 +154,26 @@ public final class ClipboardGuard {
         pb.writeObjects([item])
         let changeCount = pb.changeCount
 
-        receipt.markCommandV()
-        let key = await postPaste()
+        // Stamp at the key-down itself (after the modifier wait), so earlier reads — clipboard managers — don't count.
+        let key = await postPaste { receipt.markCommandV() }
         var h = Hold(snapshot: preserved ? snapshot : nil, changeCount: changeCount, receipt: receipt, minHold: minHold, task: nil)
         h.task = Task { @MainActor [weak self] in await self?.restoreWhenSafe(changeCount: changeCount) }
         hold = h
         return Delivery(changeCount: changeCount, keyCode: key.keyCode, modifierWaitMs: key.waitedMs, preservedClipboard: preserved)
     }
 
-    /// Waits until the last paste was read (+ quiet gap) or its minimum hold passed (for "press enter", chunked pastes).
-    func waitForSafePoint() async {
+    /// Waits until the previous paste is safely delivered.
+    /// - strict ("press enter", the next dictation): the restore condition — minimum hold passed and 250 ms since the last
+    ///   read, or the cap. The pasteboard serves a promise once, so the only read we see may be a clipboard manager's.
+    /// - chunk (the next piece of one terminal paste): a read after ⌘V + quiet gap is enough, else the minimum hold.
+    func waitForSafePoint(strict: Bool = true) async {
         guard let h = hold, let start = h.receipt.pastedAt else { return }
         while true {
             let now = ContinuousClock.now
-            if let last = h.receipt.lastReadAfterPaste, now - last >= Self.quietGap { return }
-            if now - start >= h.minHold || now - start >= cap { return }
+            let held = now - start >= h.minHold
+            if let last = h.receipt.lastReadAfterPaste, now - last >= Self.quietGap, held || !strict { return }
+            if held && (!strict || h.receipt.lastReadAfterPaste == nil) { return }
+            if now - start >= cap { return }
             await KeySynth.sleep(.milliseconds(25))
         }
     }

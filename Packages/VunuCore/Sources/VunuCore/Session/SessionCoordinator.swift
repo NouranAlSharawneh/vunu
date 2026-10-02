@@ -75,7 +75,12 @@ public final class SessionCoordinator {
 
     public func applyMicrophonePreference() {
         let prefs = Preferences.shared
-        prefs.preferredMicrophoneModelUID = prefs.preferredMicrophoneUID.flatMap { AudioDeviceCache.shared.device(withUID: $0)?.modelUID }
+        // The cache may still be loading at launch: only update the model UID when the device is actually found.
+        if let uid = prefs.preferredMicrophoneUID {
+            if let d = AudioDeviceCache.shared.device(withUID: uid) { prefs.preferredMicrophoneModelUID = d.modelUID }
+        } else {
+            prefs.preferredMicrophoneModelUID = nil
+        }
         audio.selectDevice(uid: prefs.preferredMicrophoneUID, modelUID: prefs.preferredMicrophoneModelUID)
     }
 
@@ -372,6 +377,9 @@ public final class SessionCoordinator {
         let vadSw = Stopwatch()
         let vad = await ModelManager.shared.vad.trim(samples)
         timings.vadMs = vadSw.elapsedMs
+        // Esc cancels this task and frees the session at once, so a new dictation may already own `state`. From here on a
+        // cancelled run only records the outcome and returns, without touching the session.
+        if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); return }
         guard vad.hadSpeech else {
             if duration < 1 { shake() } else { show(SessionNotice(.warning, micWarnedThisSession ? "We couldn't hear you" : "Is your microphone muted?", duration: 3)); micWarnedThisSession = true }
             record.status = .cancelled
@@ -392,6 +400,7 @@ public final class SessionCoordinator {
         let hint = prefs.languages.count == 1 ? prefs.languages.first : (prefs.autoDetectLanguage ? nil : prefs.languages.first)
         let asr: TranscriptionResult
         do { asr = try await engine.transcribe(vad.samples, languageHint: hint) } catch {
+            if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); return }
             timings.asrMs = asrSw.elapsedMs
             record.status = .failed; record.errorMessage = error.localizedDescription
             try? Database.shared.save(record)
@@ -406,7 +415,7 @@ public final class SessionCoordinator {
         guard !asr.text.trimmed.isEmpty else {
             shake(); record.status = .cancelled; try? Database.shared.save(record); finishIdle(); return
         }
-        if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); finishIdle(); return }
+        if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); return }
 
         // 3. Command Mode → rewrite selection instead of formatting
         if mode == .commandMode {
@@ -419,6 +428,7 @@ public final class SessionCoordinator {
         let ctx = makeContext(target: targetAtKeyDown)
         let pipeline = FormattingPipeline(llm: prefs.formatter == .appleIntelligence ? ModelManager.shared.appleFM : nil)
         let out = await pipeline.format(asr.text, context: ctx)
+        if Task.isCancelled { record.rawText = asr.text; record.status = .cancelled; try? Database.shared.save(record); return }
         timings.rulesMs = out.rulesMs; timings.llmMs = out.llmMs; timings.llmUsed = out.llmUsed; timings.llmRejected = out.llmRejectReason
         record.formattedText = out.text
         record.aiEditApplied = out.llmUsed
@@ -460,6 +470,7 @@ public final class SessionCoordinator {
         if decision.lineHasPunctuation == false, finalTarget?.isMessaging == true { textToInsert = MessagingAppPolicy.apply(textToInsert, isMessaging: true, style: ctx.style, lineHasPunctuation: false) }
         textToInsert = CasingSpacing.apply(textToInsert, decision)
         timings.contextMs = ctxSw.elapsedMs
+        if Task.isCancelled { record.formattedText = out.text; record.status = .cancelled; try? Database.shared.save(record); return }
         record.insertedText = textToInsert
         if let t = finalTarget { record.appBundleID = t.bundleID; record.appName = t.appName; target = t }
 
@@ -501,6 +512,8 @@ public final class SessionCoordinator {
         lastTimings = timings
         Log.file("session", "done → \(finalTarget?.appName ?? "?") [\(finalTarget?.role ?? "no element")] · \(timings.summary) · \"\(out.text.prefix(80))\"")
         Log.session.info("\(timings.summary)")
+        // Cancelled while the paste was in flight: the text is in, but the session may already belong to a new dictation.
+        if Task.isCancelled { return }
         state = .idle
         finishIdle()
         AudioStore.collectGarbage(retention: prefs.audioRetention)
@@ -526,6 +539,7 @@ public final class SessionCoordinator {
         lastCommandInstruction = instruction
         do {
             let rewritten = try await ModelManager.shared.appleFM.rewrite(selection: selection, instruction: instruction, deadline: .seconds(8))
+            if Task.isCancelled { rec.status = .cancelled; try? Database.shared.save(rec); return }
             let cleaned = FormattingPipeline.stripWrapping(rewritten)
             if cleaned.trimmed == selection.trimmed || cleaned.isEmpty {
                 rec.status = .cancelled; try? Database.shared.save(rec)
@@ -541,9 +555,11 @@ public final class SessionCoordinator {
             Sounds.shared.playTick()
             onCommandModeResult?(selection, cleaned)
         } catch {
+            if Task.isCancelled { rec.status = .cancelled; try? Database.shared.save(rec); return }
             rec.status = .failed; rec.errorMessage = error.localizedDescription; try? Database.shared.save(rec)
             show(SessionNotice(.error, "Couldn't apply that edit", detail: AppleFMFormatter.reason(for: error)))
         }
+        if Task.isCancelled { return }
         state = .idle
         finishIdle()
     }
@@ -655,11 +671,12 @@ public final class SessionCoordinator {
         case .startFailed(let why):
             guard state.isCapturing else { return }
             show(SessionNotice(.error, "Microphone isn't sending audio", detail: why, action: .chooseMicrophone, duration: 6))
-            cancel(silent: true)
+            // Failing after a second or more of speech (a restart mid-dictation): keep and transcribe what was said.
+            if audio.recordedSampleCount >= Int(AudioCapture.sampleRate) { stopAndProcess(reason: "microphone failed: \(why)") } else { cancel(silent: true) }
         case .noInput:
             guard state.isCapturing else { return }
             show(SessionNotice(.error, "Microphone isn't sending audio", detail: "Check the microphone, or pick another one.", action: .chooseMicrophone, duration: 6))
-            cancel(silent: true)
+            if audio.recordedSampleCount >= Int(AudioCapture.sampleRate) { stopAndProcess(reason: "no input") } else { cancel(silent: true) }
         case .silentInput(let device, let lidClosed):
             guard state.isCapturing else { return }
             if lidClosed {

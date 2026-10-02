@@ -39,6 +39,8 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
         var hungOps = 0
         var releaseGen = 0
         var releasePending = false
+        /// When a start last failed; the Settings meter backs off instead of retrying every frame.
+        var lastStartFailure: TimeInterval = 0
         var handler: (@Sendable (CaptureToken, CaptureEvent) -> Void)?
     }
 
@@ -57,6 +59,9 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
 
     /// A control-queue operation the watchdog can abandon. Fields are read and written under `state`'s lock.
     private final class Op: @unchecked Sendable {
+        /// This op set `starting` (a start, or a restart that is about to start); if it hangs, the flag is released with it.
+        var ownsStarting: Bool
+        init(isStart: Bool) { ownsStarting = isStart }
         var finished = false
         var abandoned = false
         var slow = false       // Bluetooth/Continuity: allow 5 s instead of 3 s
@@ -72,6 +77,9 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
         var lastCallbacks = 0
         var lastCallbackChange: TimeInterval
         var stallReported = false
+        var framesDrained = 0
+        var samplesOut = 0
+        var samplesKept = 0
         init(stream: Stream, processor: CaptureProcessor) {
             self.stream = stream; self.processor = processor
             scratchCount = 4_096 * stream.unit.clientChannels
@@ -88,6 +96,7 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
     private var drain: Drain?                      // sampleQueue
     private var timer: DispatchSourceTimer?        // sampleQueue
     private var formatWork: DispatchWorkItem?      // listenerQueue
+    private var suspectSince: TimeInterval = 0     // listenerQueue: when frames started being dropped for a format change
     private let activityLock = NSLock()
     private var activity: NSObjectProtocol?
 
@@ -157,7 +166,7 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
             if s.stream != nil, s.leaseUntil - now > 1.5 { return false }   // renewed recently
             s.leaseUntil = now + 2
             s.releaseGen += 1; s.releasePending = false
-            return s.stream == nil
+            return s.stream == nil && now - s.lastStartFailure > 2   // back off after a failed start
         }
         if needStart { ensureRunning() }
     }
@@ -196,11 +205,11 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
             return true
         }
         guard go else { return }
-        runControl("start") { [weak self] op in self?.startOp(op) }
+        runControl("start", isStart: true) { [weak self] op in self?.startOp(op) }
     }
 
-    private func runControl(_ name: String, _ body: @escaping @Sendable (Op) -> Void) {
-        let op = Op()
+    private func runControl(_ name: String, isStart: Bool = false, _ body: @escaping @Sendable (Op) -> Void) {
+        let op = Op(isStart: isStart)
         let queue = state.withLock { $0.control }
         queue.async { [weak self] in
             body(op)
@@ -226,7 +235,8 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
                 op.abandoned = true
                 s.hungOps += 1
                 s.control = DispatchQueue(label: "dev.nunu.vunu.audio.control", qos: .userInitiated)
-                s.starting = false
+                // A start queued behind a hung release still owns `starting`; only a hung start gives it up.
+                if op.ownsStarting { s.starting = false }
                 s.stream = nil   // whatever unit the hung call holds now belongs to it
                 return .abandoned(s.token)
             }
@@ -246,12 +256,18 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
 
     private func startOp(_ op: Op) {
         defer { state.withLock { s in if !op.abandoned { s.starting = false } } }
-        let (wanted, uid, model) = state.withLock { s in (wantsRunning(s), s.preferredUID, s.preferredModelUID) }
+        // Clear `starting` in the same lock as the check: a key-down landing between them would otherwise see a start
+        // "in progress" that is about to return without starting anything.
+        let (wanted, uid, model) = state.withLock { s -> (Bool, String?, String?) in
+            let w = wantsRunning(s)
+            if !w, !op.abandoned { s.starting = false }
+            return (w, s.preferredUID, s.preferredModelUID)
+        }
         guard wanted else { return }
         let t0 = Self.now
         guard let choice = AudioDevices.resolveCurrentInput(preferredUID: uid, preferredModelUID: model) else {
             Log.file("audio", "mic start failed: no input device")
-            emitCurrent(.startFailed("No microphone found"))
+            startFailed("No microphone found")
             return
         }
         if choice.device.isRemote { state.withLock { _ in op.slow = true } }
@@ -259,14 +275,14 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
         do { unit = try HALInputUnit(deviceID: choice.device.id) } catch {
             if isAbandoned(op) { return }
             Log.file("audio", "mic setup failed on \(choice.device.name) [\(choice.device.transport.rawValue)]: \(error.localizedDescription)")
-            emitCurrent(.startFailed(error.localizedDescription))
+            startFailed(error.localizedDescription)
             return
         }
         if isAbandoned(op) { unit.dispose(); return }
         let t1 = Self.now
         guard let processor = CaptureProcessor(hwRate: unit.hwRate, channels: unit.clientChannels) else {
             unit.dispose()
-            emitCurrent(.startFailed("Unsupported input format (\(Int(unit.hwRate)) Hz)"))
+            startFailed("Unsupported input format (\(Int(unit.hwRate)) Hz)")
             return
         }
         let gen = state.withLock { s -> Int in s.streamGen += 1; return s.streamGen }
@@ -277,17 +293,21 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
             unit.dispose()
             if isAbandoned(op) { return }
             Log.file("audio", "mic start failed on \(choice.device.name): \(error.localizedDescription)")
-            emitCurrent(.startFailed(error.localizedDescription))
+            startFailed(error.localizedDescription)
             return
         }
+        // Publish and mark the op finished in one step, so the watchdog can't abandon a start that already succeeded.
         let published = state.withLock { s -> Bool in
-            guard !op.abandoned else { return false }
+            guard !op.abandoned, s.stream == nil else { return false }
             s.stream = stream
+            op.finished = true
             return true
         }
         guard published else {
-            // The watchdog gave up on us while start() blocked: we own this unit now and must not leave the mic on.
-            unit.stop(); unit.dispose()
+            // The watchdog gave up on us while start() blocked, or another start won: this unit is ours to release.
+            unit.stop()
+            sampleQueue.sync { uninstallDrain(final: false, only: stream) }
+            unit.dispose()
             return
         }
         stream.listeners = HALListeners(deviceID: choice.device.id, queue: listenerQueue) { [weak self] selector in
@@ -319,7 +339,7 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
             guard let st = s.stream, gen == nil || st.gen == gen else { return (nil, false) }
             s.stream = nil
             let canStart = s.hungOps == 0 && !s.starting
-            if canStart { s.starting = true }
+            if canStart { s.starting = true; op.ownsStarting = true }
             return (st, canStart)
         }
         guard let stream else { return }
@@ -363,14 +383,26 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
         guard let stream = state.withLock({ s in s.stream?.gen == gen ? s.stream : nil }) else { return }
         switch selector {
         case kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyStreamConfiguration:
-            // Stop feeding the ring at once (frames at a new rate must not go through the old converter), restart after 300 ms quiet.
+            // Devices also post these without changing anything (some right after I/O starts); ignore those, or every
+            // frame would be dropped while they keep coming.
+            if formatWork == nil, let f = AudioDevices.inputFormat(stream.device.id), f.rate == stream.unit.hwRate,
+               f.channels == 0 || f.channels == stream.unit.deviceChannels { return }
+            // A real change: stop feeding the ring at once (frames at a new rate must not go through the old converter) and
+            // restart after 300 ms of quiet — but never postpone it more than 1 s, or a long burst would drop all audio.
+            let now = Self.now
+            if formatWork == nil {
+                suspectSince = now
+                Log.file("audio", "format change on \(stream.device.name): \(Int(stream.unit.hwRate)) Hz → \(AudioDevices.inputFormat(stream.device.id).map { "\(Int($0.rate)) Hz, \($0.channels) ch" } ?? "?")")
+            }
             stream.unit.context.suspect.store(true, ordering: .releasing)
             formatWork?.cancel()
             let work = DispatchWorkItem { [weak self] in
+                self?.formatWork = nil
                 self?.runControl("format restart") { [weak self] op in self?.formatRestartOp(op, gen: gen) }
             }
             formatWork = work
-            listenerQueue.asyncAfter(deadline: .now() + 0.3, execute: work)
+            let delay = max(0, min(0.3, suspectSince + 1.0 - now))
+            listenerQueue.asyncAfter(deadline: .now() + delay, execute: work)
         case kAudioDevicePropertyDeviceIsAlive:
             if !AudioDevices.deviceExists(stream.device.id) { gone("device disconnected", gen) }
         case kAudioDevicePropertyIOStoppedAbnormally:
@@ -421,6 +453,7 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
         drain = nil
         drainRing(d)
         if final { deliver(d.processor.flush(), d) }
+        Log.file("audio", "drain: \(d.framesDrained) frames → \(d.samplesOut) samples at 16 kHz, \(d.samplesKept) kept")
     }
 
     private func tick() {
@@ -436,12 +469,14 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
         while true {
             let n = ctx.ring.read(into: d.scratch, max: d.scratchCount)
             if n == 0 { break }
+            d.framesDrained += n / ctx.channels
             deliver(d.processor.process(interleaved: d.scratch, frames: n / ctx.channels), d)
         }
     }
 
     private func deliver(_ chunk: [Float], _ d: Drain) {
         guard !chunk.isEmpty else { return }
+        d.samplesOut += chunk.count
         let now = Self.now
         let gain = state.withLock { $0.gain }
         var out = chunk
@@ -453,14 +488,17 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
         let mapped = min(1, max(0, (log10(max(rms, 1e-5)) + 4) / 3.2))
         let discard = now < d.stream.startedAt + 0.04   // the first 40 ms can carry a start-up pop
         let samples = out, chunkPeak = pk
-        state.withLock { s in
-            if s.recording && !discard {
-                if s.firstSampleAt == 0 { s.firstSampleAt = now }
-                s.samples.append(contentsOf: samples)
+        let kept = state.withLock { s -> Bool in
+            defer {
+                s.level = mapped > s.level ? mapped : s.level * 0.55 + mapped * 0.45
+                s.peak = max(s.peak * 0.9, chunkPeak)
             }
-            s.level = mapped > s.level ? mapped : s.level * 0.55 + mapped * 0.45
-            s.peak = max(s.peak * 0.9, chunkPeak)
+            guard s.recording && !discard else { return false }
+            if s.firstSampleAt == 0 { s.firstSampleAt = now }
+            s.samples.append(contentsOf: samples)
+            return true
         }
+        if kept { d.samplesKept += samples.count }
     }
 
     private func watchdogs(_ d: Drain) {
@@ -513,6 +551,11 @@ final class HALCaptureEngine: CaptureEngine, @unchecked Sendable {
     private func emit(_ token: CaptureToken, _ event: CaptureEvent) {
         let handler = state.withLock { $0.handler }
         handler?(token, event)
+    }
+
+    private func startFailed(_ why: String) {
+        state.withLock { $0.lastStartFailure = Self.now }
+        emitCurrent(.startFailed(why))
     }
 
     private func emitCurrent(_ event: CaptureEvent) {

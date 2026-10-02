@@ -122,7 +122,8 @@ public final class AudioCapture: @unchecked Sendable {
 /// Adapts the legacy AVAudioEngine capture to the event/token contract.
 final class LegacyCaptureEngine: CaptureEngine, @unchecked Sendable {
     private let impl = LegacyAudioCapture()
-    private let state = OSAllocatedUnfairLock<(token: CaptureToken, handler: (@Sendable (CaptureToken, CaptureEvent) -> Void)?, monitoring: Bool)>(initialState: (0, nil, false))
+    private let state = OSAllocatedUnfairLock<(token: CaptureToken, handler: (@Sendable (CaptureToken, CaptureEvent) -> Void)?, monitoring: Bool, leaseUntil: TimeInterval)>(initialState: (0, nil, false, 0))
+    private let monitorQueue = DispatchQueue(label: "dev.nunu.vunu.audio.legacy-monitor")
 
     init() {
         impl.onDeviceChanged = { [weak self] change in
@@ -154,13 +155,29 @@ final class LegacyCaptureEngine: CaptureEngine, @unchecked Sendable {
     }
     func endRecording() -> [Float] { impl.endRecording() }
     func snapshotSamples() -> [Float] { impl.snapshotSamples() }
-    // The legacy engine counts monitor references; map the lease onto a single reference.
+    // The legacy engine counts monitor references; map the lease onto a single reference that lapses 2 s after the last
+    // renewal (the Hub window is never released, so the meter's onDisappear can't be relied on). Its start blocks on HAL
+    // work, so it runs off the main thread.
     func renewMonitoringLease() {
-        guard !AudioCapture.isTesting, state.withLock({ s -> Bool in defer { s.monitoring = true }; return !s.monitoring }) else { return }
-        impl.startMonitoring()
+        guard !AudioCapture.isTesting else { return }
+        let start = state.withLock { s -> Bool in
+            s.leaseUntil = ProcessInfo.processInfo.systemUptime + 2
+            defer { s.monitoring = true }
+            return !s.monitoring
+        }
+        guard start else { return }
+        monitorQueue.async { [impl] in impl.startMonitoring() }
+        checkLease()
+    }
+    private func checkLease() {
+        monitorQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self else { return }
+            let lapsed = self.state.withLock { s -> Bool in s.monitoring && s.leaseUntil < ProcessInfo.processInfo.systemUptime }
+            if lapsed { self.endMonitoring() } else if self.state.withLock({ $0.monitoring }) { self.checkLease() }
+        }
     }
     func endMonitoring() {
-        if state.withLock({ s -> Bool in defer { s.monitoring = false }; return s.monitoring }) { impl.stopMonitoring() }
+        if state.withLock({ s -> Bool in defer { s.monitoring = false }; return s.monitoring }) { monitorQueue.async { [impl] in impl.stopMonitoring() } }
     }
     func releaseIfIdle() { impl.releaseIfIdle() }
     func selectDevice(uid: String?, modelUID: String?) { impl.selectDevice(uid: uid) }
