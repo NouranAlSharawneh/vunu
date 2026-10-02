@@ -5,7 +5,11 @@ public enum AppCatalog {
     public static let terminals: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable", "dev.warp.Warp",
         "net.kovidgoyal.kitty", "org.alacritty", "io.alacritty", "com.github.wez.wezterm", "co.zeit.hyper", "com.raphaelamorim.rio",
+        "com.cmuxterm.app",
     ]
+    /// Terminals that take one bracketed paste of any size and drop earlier chunks when the clipboard changes under them
+    /// (cmux reads the pasteboard from a helper ~1–1.6 s after ⌘V and pastes nothing if its changeCount moved).
+    public static let singlePasteTerminals: Set<String> = ["com.cmuxterm.app"]
     /// Editors whose integrated terminal / chat panes are common dictation targets (paste path, TUI chunking).
     public static let codeEditors: Set<String> = [
         "com.microsoft.VSCode", "com.microsoft.VSCodeInsiders", "com.todesktop.230313mzl4w4u92" /* Cursor */, "com.exafunction.windsurf",

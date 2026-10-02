@@ -91,6 +91,24 @@ public enum AudioDevices {
         return devices.first(where: { !$0.isBluetooth })?.id ?? def
     }
 
+    /// "Name [transport]" for logs.
+    public static func describe(_ id: AudioDeviceID?) -> String {
+        guard let id else { return "none" }
+        let name = getString(id, address(kAudioObjectPropertyName)) ?? "#\(id)"
+        let raw = getData(id, address(kAudioDevicePropertyTransportType), UInt32(0)) ?? 0
+        let transport: String
+        switch raw {
+        case kAudioDeviceTransportTypeBuiltIn: transport = "builtIn"
+        case kAudioDeviceTransportTypeUSB: transport = "usb"
+        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE: transport = "bluetooth"
+        case kAudioDeviceTransportTypeVirtual: transport = "virtual"
+        case kAudioDeviceTransportTypeAggregate: transport = "aggregate"
+        case kAudioDeviceTransportTypeContinuityCaptureWired, kAudioDeviceTransportTypeContinuityCaptureWireless: transport = "continuity"
+        default: transport = "other"
+        }
+        return "\(name) [\(transport)]"
+    }
+
     public static func deviceExists(_ id: AudioDeviceID) -> Bool {
         (getData(id, address(kAudioDevicePropertyDeviceIsAlive), UInt32(0)) ?? 0) != 0
     }

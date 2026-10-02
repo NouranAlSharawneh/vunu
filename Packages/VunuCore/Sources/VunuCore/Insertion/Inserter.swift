@@ -38,20 +38,62 @@ public actor Inserter {
         let isTerminal = target.isTerminal || target.isCodeEditor
         var payload = text
         if isTerminal, payload.hasSuffix("\n") { payload.removeLast() }
-        let chunked = isTerminal && payload.count > 1_500
-        let snapshot = await MainActor.run { PasteboardSnapshot() }
+        let singlePaste = target.bundleID.map { AppCatalog.singlePasteTerminals.contains($0) } ?? false
+        let chunked = isTerminal && !singlePaste && payload.count > 1_500
+        // A restore still pending from the previous dictation means the clipboard holds our text, not the user's: keep the original.
+        let snapshot: PasteboardSnapshot
+        if let p = pendingRestore, await MainActor.run(body: { NSPasteboard.general.changeCount }) == p.changeCount {
+            p.task.cancel()
+            snapshot = p.snapshot
+        } else {
+            snapshot = await MainActor.run { PasteboardSnapshot() }
+        }
+        pendingRestore = nil
         let pieces = chunked ? Self.chunks(payload, size: 800) : [payload]
+        var ours = 0
         for (i, piece) in pieces.enumerated() {
-            let cc = await MainActor.run { PasteboardSnapshot.writeText(piece) }
-            _ = cc
+            ours = await MainActor.run { PasteboardSnapshot.writeText(piece) }
             KeySynth.commandV()
             try? await Task.sleep(for: .milliseconds(i < pieces.count - 1 ? 60 : 0))
         }
-        // Wait for the target to read the pasteboard: changeCount stays ours; just wait a bounded time.
-        try? await Task.sleep(for: .milliseconds(isTerminal ? 250 : 120))
-        if pressEnter { KeySynth.returnKey() }
-        await MainActor.run { snapshot.restore() }
+        // Apps read the pasteboard some time after ⌘V (cmux ~1–1.6 s, Electron a few hundred ms). Restoring before that pastes
+        // the old clipboard, or nothing. Hold long enough, and never in a way Esc (task cancellation) can cut short.
+        let hold = Self.restoreHold(isTerminal: isTerminal, isElectron: target.isBrowserElectron)
+        let written = ours
+        if pressEnter {
+            await Self.uncancellableSleep(hold)
+            KeySynth.returnKey()
+            try? await Task.sleep(for: .milliseconds(50))
+            await MainActor.run { Self.restore(snapshot, ifStill: written) }
+        } else {
+            let task = Task.detached {
+                try? await Task.sleep(for: hold)
+                guard !Task.isCancelled else { return }
+                await MainActor.run { Self.restore(snapshot, ifStill: written) }
+            }
+            pendingRestore = (snapshot, written, task)
+        }
         return .inserted(path: chunked ? "paste-chunked" : "paste")
+    }
+
+    private var pendingRestore: (snapshot: PasteboardSnapshot, changeCount: Int, task: Task<Void, Never>)?
+
+    static func restoreHold(isTerminal: Bool, isElectron: Bool) -> Duration {
+        isTerminal ? .milliseconds(2_500) : isElectron ? .milliseconds(800) : .milliseconds(250)
+    }
+
+    /// Put the user's clipboard back only if it still holds our text; anything they copied meanwhile wins.
+    @MainActor static func restore(_ snapshot: PasteboardSnapshot, ifStill changeCount: Int) {
+        guard NSPasteboard.general.changeCount == changeCount else {
+            Log.file("paste", "restore skipped: clipboard changed since paste")
+            return
+        }
+        snapshot.restore()
+    }
+
+    /// Esc cancels the processing task, which would turn every `Task.sleep` into a no-op; detached tasks are not cancelled with it.
+    static func uncancellableSleep(_ d: Duration) async {
+        await Task.detached { try? await Task.sleep(for: d) }.value
     }
 
     /// Copy-only (Path C / manual re-paste).

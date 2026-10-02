@@ -104,8 +104,11 @@ public final class AudioCapture: @unchecked Sendable {
             hw = input.outputFormat(forBus: 0)
         }
         guard Self.formatsAgree(input) else {
+            // Read the input node before teardown: teardownLocked() frees the engine that owns it.
+            let reason = "input format not ready (\(hw.sampleRate) Hz vs \(input.inputFormat(forBus: 0).sampleRate) Hz)"
             teardownLocked()
-            throw VunuError.engineUnavailable("input format not ready (\(hw.sampleRate) Hz vs \(input.inputFormat(forBus: 0).sampleRate) Hz)")
+            Log.file("audio", reason)
+            throw VunuError.engineUnavailable(reason)
         }
         if converter == nil || converter?.inputFormat != hw {
             converter = AVAudioConverter(from: hw, to: targetFormat)
@@ -140,6 +143,7 @@ public final class AudioCapture: @unchecked Sendable {
             }
         }
         Log.audio.info("audio engine started (\(hw.sampleRate) Hz, \(hw.channelCount) ch)")
+        Log.file("audio", "mic start: \(AudioDevices.describe(currentDeviceID)) \(Int(hw.sampleRate)) Hz \(hw.channelCount) ch (\(deviceUID == nil ? "auto" : "explicit")); default in \(AudioDevices.describe(AudioDevices.defaultInputDeviceID())), out \(AudioDevices.describe(AudioDevices.defaultOutputDeviceID()))")
         scheduleIdleStop()
     }
 
@@ -221,9 +225,10 @@ public final class AudioCapture: @unchecked Sendable {
     /// Stop the engine after 10 min of no recording to save power; restarted on the next key-down.
     private func scheduleIdleStop() {
         idleTimer?.cancel()
+        // Runs on `queue`: call stopLocked() directly (stop() would queue.sync onto the queue it is already on).
         let item = DispatchWorkItem { [weak self] in
-            guard let self, !self.isRecording else { return }
-            self.stop()
+            guard let self, !self.isRecording, self.state.withLock({ $0.monitoring == 0 }) else { return }
+            self.stopLocked()
         }
         idleTimer = item
         queue.asyncAfter(deadline: .now() + 600, execute: item)
