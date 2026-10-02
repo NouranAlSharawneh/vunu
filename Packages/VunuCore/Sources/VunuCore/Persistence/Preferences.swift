@@ -101,6 +101,7 @@ public final class Preferences {
         languages = d.stringArray(forKey: "languages") ?? ["en"]
         autoDetectLanguage = d.object(forKey: "autoDetectLanguage") as? Bool ?? true
         preferredMicrophoneUID = d.string(forKey: "preferredMicrophoneUID")
+        preferredMicrophoneModelUID = d.string(forKey: "preferredMicrophoneModelUID")
         livePreview = d.bool(forKey: "livePreview")
         commandModeEnabled = d.object(forKey: "commandModeEnabled") as? Bool ?? true
         pressEnterCommand = d.object(forKey: "pressEnterCommand") as? Bool ?? true
@@ -108,6 +109,7 @@ public final class Preferences {
         whisperMode = d.bool(forKey: "whisperMode")
         handsFreeSilenceStopSeconds = d.object(forKey: "handsFreeSilenceStopSeconds") as? Double ?? 8
         flowBarPosition = d.string(forKey: "flowBarPosition")
+        flowBarAnchor = d.string(forKey: "flowBarAnchor")
         hideFlowBarUntil = d.object(forKey: "hideFlowBarUntil") as? Date
         stylesByCategory = Self.decode([AppCategory: WritingStyle].self, d.data(forKey: "stylesByCategory")) ?? [:]
         extraAppsByCategory = Self.decode([AppCategory: [String]].self, d.data(forKey: "extraAppsByCategory")) ?? [:]
@@ -142,13 +144,18 @@ public final class Preferences {
     public var languages: [String] { didSet { d.set(languages, forKey: "languages") } }
     public var autoDetectLanguage: Bool { didSet { d.set(autoDetectLanguage, forKey: "autoDetectLanguage") } }
     public var preferredMicrophoneUID: String? { didSet { d.set(preferredMicrophoneUID, forKey: "preferredMicrophoneUID") } }
+    /// Model UID of the chosen mic, to find the same model again under a new UID (e.g. another USB port).
+    public var preferredMicrophoneModelUID: String? { didSet { d.set(preferredMicrophoneModelUID, forKey: "preferredMicrophoneModelUID") } }
     public var livePreview: Bool { didSet { d.set(livePreview, forKey: "livePreview") } }
     public var commandModeEnabled: Bool { didSet { d.set(commandModeEnabled, forKey: "commandModeEnabled") } }
     public var pressEnterCommand: Bool { didSet { d.set(pressEnterCommand, forKey: "pressEnterCommand") } }
     public var pressEnterExplained: Bool { didSet { d.set(pressEnterExplained, forKey: "pressEnterExplained") } }
     public var whisperMode: Bool { didSet { d.set(whisperMode, forKey: "whisperMode") } }
     public var handsFreeSilenceStopSeconds: Double { didSet { d.set(handsFreeSilenceStopSeconds, forKey: "handsFreeSilenceStopSeconds") } }
+    /// Legacy (≤ 0.3.x): origin of the idle-size Flow Bar window. Migrated to `flowBarAnchor`.
     public var flowBarPosition: String? { didSet { d.set(flowBarPosition, forKey: "flowBarPosition") } }
+    /// "x,y": bottom-center of the Flow Bar pill area in screen coordinates.
+    public var flowBarAnchor: String? { didSet { d.set(flowBarAnchor, forKey: "flowBarAnchor") } }
     public var hideFlowBarUntil: Date? { didSet { d.set(hideFlowBarUntil, forKey: "hideFlowBarUntil") } }
     public var stylesByCategory: [AppCategory: WritingStyle] { didSet { d.set(Self.encode(stylesByCategory), forKey: "stylesByCategory") } }
     public var extraAppsByCategory: [AppCategory: [String]] { didSet { d.set(Self.encode(extraAppsByCategory), forKey: "extraAppsByCategory") } }

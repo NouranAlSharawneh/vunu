@@ -18,6 +18,8 @@ public final class SessionCoordinator {
     public var notice: SessionNotice?
     public private(set) var secureInputActive = false
     public private(set) var processingSince: Date?
+    /// A Bluetooth mic is still switching profiles: the bar shows "Connecting mic…" and the start ping waits for real audio.
+    public private(set) var micConnecting = false
     public var scratchpadText: String = ""
     public var onScratchpadRequested: (@MainActor () -> Void)?
     public var onCommandModeResult: (@MainActor (String, String) -> Void)?   // (original, rewritten)
@@ -26,7 +28,7 @@ public final class SessionCoordinator {
     public let audio = AudioCapture()
     public let hotkeys: HotkeyEngine
     public private(set) var tap: EventTapMonitor?
-    private let muter = OutputMuter()
+    let muter = OutputMuter()
     private var armTimer: Task<Void, Never>?
     private var maxTimer: Task<Void, Never>?
     private var silenceTimer: Task<Void, Never>?
@@ -40,6 +42,14 @@ public final class SessionCoordinator {
     private var visibleSymbols: [String] = []
     private var editWatcher: Task<Void, Never>?
     private var lastCommandInstruction: String?
+    /// The current dictation's capture; events carrying another token are stale and ignored.
+    private var captureToken: CaptureToken = 0
+    private var micStarted = false
+    private var micReady = false
+    private var micIsBluetooth = false
+    private var pingPending = false
+    /// Bumped when the Mac goes to sleep; text whose dictation spanned a sleep is copied instead of pasted into whatever is in front after wake.
+    private var sleepGeneration = 0
 
     private init() {
         let engine = HotkeyEngine { event in
@@ -49,6 +59,7 @@ public final class SessionCoordinator {
         hotkeys.setBindings(Preferences.shared.shortcuts)
         let extra = Preferences.shared.extraAppsByCategory
         FocusTracker.extraApps.withLock { $0 = extra }
+        audio.setEventHandler { token, event in Task { @MainActor in SessionCoordinator.shared.captureEvent(token, event) } }
     }
 
     // MARK: lifecycle
@@ -62,13 +73,15 @@ public final class SessionCoordinator {
     public func restartHotkeys() { try? tap?.restart() }
     public func reloadBindings() { hotkeys.setBindings(Preferences.shared.shortcuts) }
 
-    /// The engine is started on demand (key-down) and released when idle so the mic-in-use indicator only shows while dictating.
-    public func warmAudio() {
-        audio.onDeviceChanged = { change in Task { @MainActor in SessionCoordinator.shared.deviceChangedMidSession(change) } }
-    }
-
     public func applyMicrophonePreference() {
-        audio.selectDevice(uid: Preferences.shared.preferredMicrophoneUID)
+        let prefs = Preferences.shared
+        // The cache may still be loading at launch: only update the model UID when the device is actually found.
+        if let uid = prefs.preferredMicrophoneUID {
+            if let d = AudioDeviceCache.shared.device(withUID: uid) { prefs.preferredMicrophoneModelUID = d.modelUID }
+        } else {
+            prefs.preferredMicrophoneModelUID = nil
+        }
+        audio.selectDevice(uid: prefs.preferredMicrophoneUID, modelUID: prefs.preferredMicrophoneModelUID)
     }
 
     // MARK: hotkey events
@@ -177,11 +190,13 @@ public final class SessionCoordinator {
         notice = nil
         previewText = ""
         let sw = Stopwatch()
-        do { try audio.beginRecording(gain: Preferences.shared.whisperMode ? 2.5 : 1) } catch {
-            state = .error("Microphone unavailable")
-            show(SessionNotice(.error, "Selected microphone is unavailable", action: .chooseMicrophone))
-            return
-        }
+        // Opens the mic on a background queue and returns at once; failures arrive as capture events.
+        captureToken = audio.beginRecording(gain: Preferences.shared.whisperMode ? 2.5 : 1)
+        micStarted = false
+        micReady = false
+        micIsBluetooth = false
+        micConnecting = false
+        pingPending = false
         state = .armed
         hotkeys.setSessionActive(true)
         Task {
@@ -212,8 +227,10 @@ public final class SessionCoordinator {
         guard state == .armed else { return }
         state = .recording
         recordingStartedAt = Date()
-        Sounds.shared.playPing()
-        if Preferences.shared.muteMusicWhileDictating { muter.muteIfPlaying() }
+        // The ping means "talk now". Wait until the mic is running, and for a Bluetooth mic (1–3 s to switch to its call profile)
+        // until it really hears.
+        if micStarted && (!micIsBluetooth || micReady) { Sounds.shared.playPing() } else { pingPending = true; micConnecting = micIsBluetooth }
+        if Preferences.shared.muteMusicWhileDictating { muter.scheduleMute() }
         startMaxTimer()
         if mode == .handsFree { startSilenceWatch() }
         if Preferences.shared.livePreview { startPreview() }
@@ -290,20 +307,28 @@ public final class SessionCoordinator {
         let wasArmed = state == .armed
         state = .stopping
         stopPreview()
-        muter.restoreIfNeeded()
+        muter.restore()
         let samples = audio.endRecording()
         let duration = Double(samples.count) / AudioCapture.sampleRate
         let startMode = mode
         let keyUp = Stopwatch()
-        if wasArmed || duration < 0.25 { state = .cancelled; finishIdle(); return }
+        let wasConnecting = micConnecting
+        micConnecting = false; pingPending = false
+        if wasArmed || duration < 0.25 {
+            // Held past the tap threshold but a Bluetooth mic never delivered audio: say so instead of vanishing.
+            if !wasArmed, wasConnecting { show(SessionNotice(.warning, "Microphone wasn't ready", detail: "Your headset was still switching to its microphone. Hold a moment longer, or use your Mac's microphone.", action: .chooseMicrophone, duration: 5)) }
+            state = .cancelled; finishIdle(); return
+        }
         processingSince = Date()
-        processingTask = Task { await process(samples: samples, duration: duration, mode: startMode, keyUp: keyUp) }
+        let sleepGen = sleepGeneration
+        processingTask = Task { await process(samples: samples, duration: duration, mode: startMode, keyUp: keyUp, sleepGeneration: sleepGen) }
     }
 
     public func cancel(silent: Bool) {
         armTimer?.cancel(); maxTimer?.cancel(); silenceTimer?.cancel()
+        micConnecting = false; pingPending = false
         stopPreview()
-        muter.restoreIfNeeded()
+        muter.restore()
         let wasCapturing = state.isCapturing
         if state.isProcessing { processingTask?.cancel() }
         let samples = wasCapturing ? audio.endRecording() : []
@@ -336,7 +361,7 @@ public final class SessionCoordinator {
 
     // MARK: pipeline
 
-    private func process(samples: [Float], duration: Double, mode: SessionMode, keyUp: Stopwatch) async {
+    private func process(samples: [Float], duration: Double, mode: SessionMode, keyUp: Stopwatch, sleepGeneration sleepGenAtKeyUp: Int? = nil) async {
         var timings = StageTimings()
         timings.captureMs = duration * 1000
         let prefs = Preferences.shared
@@ -352,6 +377,9 @@ public final class SessionCoordinator {
         let vadSw = Stopwatch()
         let vad = await ModelManager.shared.vad.trim(samples)
         timings.vadMs = vadSw.elapsedMs
+        // Esc cancels this task and frees the session at once, so a new dictation may already own `state`. From here on a
+        // cancelled run only records the outcome and returns, without touching the session.
+        if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); return }
         guard vad.hadSpeech else {
             if duration < 1 { shake() } else { show(SessionNotice(.warning, micWarnedThisSession ? "We couldn't hear you" : "Is your microphone muted?", duration: 3)); micWarnedThisSession = true }
             record.status = .cancelled
@@ -372,6 +400,7 @@ public final class SessionCoordinator {
         let hint = prefs.languages.count == 1 ? prefs.languages.first : (prefs.autoDetectLanguage ? nil : prefs.languages.first)
         let asr: TranscriptionResult
         do { asr = try await engine.transcribe(vad.samples, languageHint: hint) } catch {
+            if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); return }
             timings.asrMs = asrSw.elapsedMs
             record.status = .failed; record.errorMessage = error.localizedDescription
             try? Database.shared.save(record)
@@ -386,7 +415,7 @@ public final class SessionCoordinator {
         guard !asr.text.trimmed.isEmpty else {
             shake(); record.status = .cancelled; try? Database.shared.save(record); finishIdle(); return
         }
-        if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); finishIdle(); return }
+        if Task.isCancelled { record.status = .cancelled; try? Database.shared.save(record); return }
 
         // 3. Command Mode → rewrite selection instead of formatting
         if mode == .commandMode {
@@ -399,6 +428,7 @@ public final class SessionCoordinator {
         let ctx = makeContext(target: targetAtKeyDown)
         let pipeline = FormattingPipeline(llm: prefs.formatter == .appleIntelligence ? ModelManager.shared.appleFM : nil)
         let out = await pipeline.format(asr.text, context: ctx)
+        if Task.isCancelled { record.rawText = asr.text; record.status = .cancelled; try? Database.shared.save(record); return }
         timings.rulesMs = out.rulesMs; timings.llmMs = out.llmMs; timings.llmUsed = out.llmUsed; timings.llmRejected = out.llmRejectReason
         record.formattedText = out.text
         record.aiEditApplied = out.llmUsed
@@ -406,6 +436,18 @@ public final class SessionCoordinator {
 
         // 5. Target at release + surrounding text
         state = .inserting
+        // The Mac slept since key-up: whatever is in front after wake isn't where this was meant to go.
+        if let g = sleepGenAtKeyUp, g != sleepGeneration, mode != .scratchpad {
+            await Inserter.shared.copyToClipboard(out.text)
+            record.formattedText = out.text; record.status = .done
+            record = (try? Database.shared.save(record)) ?? record
+            lastTranscript = record
+            show(SessionNotice(.info, "Copied your dictation", detail: "Your Mac slept before Vunu could paste it. Press ⌘V to paste.", action: .copy(out.text), duration: 8))
+            Log.file("session", "slept before insert; copied to clipboard")
+            state = .idle
+            finishIdle()
+            return
+        }
         let ctxSw = Stopwatch()
         var releaseTarget = await FocusTracker.shared.snapshot(readBrowserURL: false) ?? targetAtKeyDown
         // Switched apps mid-dictation (⌘Tab, Space swipe, click): the text belongs where dictation started.
@@ -428,6 +470,7 @@ public final class SessionCoordinator {
         if decision.lineHasPunctuation == false, finalTarget?.isMessaging == true { textToInsert = MessagingAppPolicy.apply(textToInsert, isMessaging: true, style: ctx.style, lineHasPunctuation: false) }
         textToInsert = CasingSpacing.apply(textToInsert, decision)
         timings.contextMs = ctxSw.elapsedMs
+        if Task.isCancelled { record.formattedText = out.text; record.status = .cancelled; try? Database.shared.save(record); return }
         record.insertedText = textToInsert
         if let t = finalTarget { record.appBundleID = t.bundleID; record.appName = t.appName; target = t }
 
@@ -456,12 +499,12 @@ public final class SessionCoordinator {
         case .clipboardOnly(let reason):
             timings.insertPath = "clipboard(\(reason))"
             record.status = .done
-            show(SessionNotice(.warning, "Click a textbox and use ⌘⌃V to paste", action: .copy(out.text), duration: 6))
+            show(SessionNotice(.warning, "Click a text field and press ⌘V to paste", detail: "Your dictation is on the clipboard.", action: .copy(out.text), duration: 6))
         case .blocked(let reason):
             timings.insertPath = "blocked(\(reason))"
             record.status = .done
             await Inserter.shared.copyToClipboard(out.text)
-            show(SessionNotice(.warning, "Paste blocked", detail: "Vunu can't paste right now. Text saved to clipboard", action: .copy(out.text), duration: 6))
+            show(SessionNotice(.warning, "Paste blocked", detail: "Vunu can't paste here. Your dictation is on the clipboard — press ⌘V.", action: .copy(out.text), duration: 6))
         }
         record.timingsJSON = (try? JSONEncoder().encode(timings)).flatMap { String(data: $0, encoding: .utf8) }
         record = (try? Database.shared.save(record)) ?? record
@@ -469,6 +512,8 @@ public final class SessionCoordinator {
         lastTimings = timings
         Log.file("session", "done → \(finalTarget?.appName ?? "?") [\(finalTarget?.role ?? "no element")] · \(timings.summary) · \"\(out.text.prefix(80))\"")
         Log.session.info("\(timings.summary)")
+        // Cancelled while the paste was in flight: the text is in, but the session may already belong to a new dictation.
+        if Task.isCancelled { return }
         state = .idle
         finishIdle()
         AudioStore.collectGarbage(retention: prefs.audioRetention)
@@ -494,6 +539,7 @@ public final class SessionCoordinator {
         lastCommandInstruction = instruction
         do {
             let rewritten = try await ModelManager.shared.appleFM.rewrite(selection: selection, instruction: instruction, deadline: .seconds(8))
+            if Task.isCancelled { rec.status = .cancelled; try? Database.shared.save(rec); return }
             let cleaned = FormattingPipeline.stripWrapping(rewritten)
             if cleaned.trimmed == selection.trimmed || cleaned.isEmpty {
                 rec.status = .cancelled; try? Database.shared.save(rec)
@@ -509,9 +555,11 @@ public final class SessionCoordinator {
             Sounds.shared.playTick()
             onCommandModeResult?(selection, cleaned)
         } catch {
+            if Task.isCancelled { rec.status = .cancelled; try? Database.shared.save(rec); return }
             rec.status = .failed; rec.errorMessage = error.localizedDescription; try? Database.shared.save(rec)
             show(SessionNotice(.error, "Couldn't apply that edit", detail: AppleFMFormatter.reason(for: error)))
         }
+        if Task.isCancelled { return }
         state = .idle
         finishIdle()
     }
@@ -597,14 +645,52 @@ public final class SessionCoordinator {
         }
     }
 
-    private func deviceChangedMidSession(_ change: AudioCapture.DeviceChange) {
-        guard state.isCapturing else { return }
-        // A format/route change on the same mic (e.g. Bluetooth profile switch, audio starting elsewhere) is not a disconnect:
-        // the engine has already restarted and keeps appending to the same recording.
-        guard change == .deviceLost else { return }
-        let sofar = audio.snapshotSamples()
-        show(SessionNotice(.warning, "Microphone disconnected", action: sofar.count > 8000 ? .insert("") : .none, duration: 8))
-        if sofar.count > 8000 { stopAndProcess(reason: "microphone lost") } else { cancel(silent: true) }
+    // MARK: capture events
+
+    func captureEvent(_ token: CaptureToken, _ event: CaptureEvent) {
+        // A late event from an earlier dictation (or from the --audio-probe) must not touch this one.
+        guard token == captureToken else { return }
+        switch event {
+        case .started(_, let bluetooth):
+            micStarted = true
+            micIsBluetooth = bluetooth
+            guard state == .recording, pingPending else { return }
+            if !bluetooth || micReady { pingPending = false; micConnecting = false; Sounds.shared.playPing() } else { micConnecting = true }
+        case .micReady:
+            micReady = true
+            micConnecting = false
+            if pingPending, micStarted, state == .recording { pingPending = false; Sounds.shared.playPing() }
+        case .formatChanged:
+            break   // same mic restarted; the recording continues (logged by the engine)
+        case .deviceLost(let reason):
+            guard state.isCapturing else { return }
+            // Keep what was said if there's a second or more of it; a format change is not a disconnect (handled above).
+            let sofar = audio.snapshotSamples()
+            show(SessionNotice(.warning, "Microphone disconnected", detail: reason.prefix(1).uppercased() + reason.dropFirst(), duration: 6))
+            if sofar.count >= Int(AudioCapture.sampleRate) { stopAndProcess(reason: "microphone lost: \(reason)") } else { cancel(silent: true) }
+        case .startFailed(let why):
+            guard state.isCapturing else { return }
+            show(SessionNotice(.error, "Microphone isn't sending audio", detail: why, action: .chooseMicrophone, duration: 6))
+            // Failing after a second or more of speech (a restart mid-dictation): keep and transcribe what was said.
+            if audio.recordedSampleCount >= Int(AudioCapture.sampleRate) { stopAndProcess(reason: "microphone failed: \(why)") } else { cancel(silent: true) }
+        case .noInput:
+            guard state.isCapturing else { return }
+            show(SessionNotice(.error, "Microphone isn't sending audio", detail: "Check the microphone, or pick another one.", action: .chooseMicrophone, duration: 6))
+            if audio.recordedSampleCount >= Int(AudioCapture.sampleRate) { stopAndProcess(reason: "no input") } else { cancel(silent: true) }
+        case .silentInput(let device, let lidClosed):
+            guard state.isCapturing else { return }
+            if lidClosed {
+                show(SessionNotice(.warning, "Built-in mic is off while the lid is closed", detail: "Pick another microphone, or open the lid.", action: .chooseMicrophone, duration: 6))
+            } else {
+                show(SessionNotice(.warning, "\(device) is sending silence", detail: "It may be busy with another device, like your phone. Your Mac's microphone avoids this.", action: .chooseMicrophone, duration: 6))
+            }
+        }
+    }
+
+    /// NSWorkspace.willSleep: finish a dictation in progress; one being processed is copied instead of pasted after wake.
+    public func systemWillSleep() {
+        if state.isCapturing { stopAndProcess(reason: "sleep") }
+        sleepGeneration += 1   // after the stop, so that dictation is copied rather than pasted after wake
     }
 
     #if DEBUG

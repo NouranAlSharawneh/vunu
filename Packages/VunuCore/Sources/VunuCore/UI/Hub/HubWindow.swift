@@ -130,7 +130,7 @@ struct HelpView: View {
                     helpRow("⌘⌃V / ⌘⌃C", "Paste or copy the last transcript again.")
                     helpRow("fn+⌃ (Command Mode)", "Select text, hold, and say how to change it. Enable in Settings → Experimental.")
                     helpRow("Say \"period\", \"new line\", \"at sign\"…", "Spoken punctuation is converted. \"press enter\" at the end sends the message.")
-                    helpRow("Music keeps playing", "Vunu never ducks or pauses other apps' audio. Optional \"Mute music while dictating\" is in Settings → System.")
+                    helpRow("Music keeps playing", "Vunu never ducks or pauses other apps' audio. With Bluetooth headphones it records from your Mac's mic (Microphone: Automatic), so music stays at full quality. Optional \"Mute music while dictating\" is in Settings → System.")
                     helpRow("Everything is local", "Models live in ~/Library/Application Support/Vunu/Models. No accounts, no network except model downloads.")
                 }
                 Text("Log file: ~/Library/Logs/Vunu/vunu.log").font(Fonts.ui(12)).foregroundStyle(HubColors.secondaryText)

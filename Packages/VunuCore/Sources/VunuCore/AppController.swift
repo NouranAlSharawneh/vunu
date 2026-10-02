@@ -1,12 +1,12 @@
 import AppKit
 import SwiftUI
 import CoreAudio
+import Carbon.HIToolbox
 
 /// Wires everything together. Called from the thin app target's NSApplicationDelegate.
 @MainActor
 public final class AppController {
     public static let shared = AppController()
-    private var deviceListener: AudioObjectPropertyListenerBlock?
     private init() {}
 
     public func launch(arguments: [String]) {
@@ -21,7 +21,8 @@ public final class AppController {
         observeSystem()
 
         let session = SessionCoordinator.shared
-        if Permissions.microphoneGranted { session.warmAudio(); session.applyMicrophonePreference() }
+        if Permissions.microphoneGranted { session.applyMicrophonePreference() }
+        session.muter.restorePendingFromLastRun()
         if Permissions.accessibilityGranted {
             do { try session.startHotkeys() } catch { Log.hotkeys.error("tap start failed: \(error)"); Log.file("hotkeys", "tap start failed: \(error)") }
         }
@@ -31,6 +32,7 @@ public final class AppController {
         } else {
             Task { await ModelManager.shared.loadSelected() }
         }
+        if arguments.contains("--audio-probe") { Task { try? await Task.sleep(for: .seconds(2)); await session.audio.probe() } }
         if arguments.contains("--benchmark") { Task { try? await Task.sleep(for: .seconds(3)); await runBenchmarkToLog() } }
         if arguments.contains("--hub") { HubWindowController.shared.show() }
         AudioStore.collectGarbage(retention: Preferences.shared.audioRetention)
@@ -39,7 +41,7 @@ public final class AppController {
 
     private func afterOnboarding() {
         let s = SessionCoordinator.shared
-        if Permissions.microphoneGranted { s.warmAudio(); s.applyMicrophonePreference() }
+        if Permissions.microphoneGranted { s.applyMicrophonePreference() }
         if Permissions.accessibilityGranted { try? s.startHotkeys() }
         Task { await ModelManager.shared.loadSelected() }
         HubWindowController.shared.show(page: .home)
@@ -59,8 +61,16 @@ public final class AppController {
 
     private func observeSystem() {
         let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { SessionCoordinator.shared.systemWillSleep() }
+        }
         nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             Task { @MainActor in try? await Task.sleep(for: .seconds(2)); SessionCoordinator.shared.restartHotkeys(); Log.file("hotkeys", "tap restarted after wake") }
+        }
+        // ⌘V's key code follows the keyboard layout (Dvorak, Arabic…).
+        KeySynth.refreshLayout()
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { KeySynth.refreshLayout() }
         }
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.apple.screenIsUnlocked"), object: nil, queue: .main) { _ in
             Task { @MainActor in try? await Task.sleep(for: .seconds(1)); SessionCoordinator.shared.restartHotkeys() }
@@ -72,13 +82,8 @@ public final class AppController {
                 SessionCoordinator.shared.tap?.reenable()
             }
         }
-        // audio device list changes → notify pickers
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        let block: AudioObjectPropertyListenerBlock = { _, _ in
-            Task { @MainActor in NotificationCenter.default.post(name: .vunuAudioDevicesChanged, object: nil) }
-        }
-        deviceListener = block
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main, block)
+        // audio device list changes → refresh the cache off main, which then notifies pickers
+        AudioDeviceCache.shared.start()
     }
 
     private func runBenchmarkToLog() async {
@@ -100,6 +105,8 @@ public final class AppController {
     public func terminate() {
         SessionCoordinator.shared.tap?.stop()
         SessionCoordinator.shared.audio.stop()
+        SessionCoordinator.shared.muter.restoreBeforeQuit()
+        ClipboardGuard.shared.finishNow()
         Log.file("app", "quit")
     }
 }

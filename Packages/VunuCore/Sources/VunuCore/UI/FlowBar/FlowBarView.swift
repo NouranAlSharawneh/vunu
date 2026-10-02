@@ -35,7 +35,7 @@ struct FlowBarView: View {
 
     private var pill: some View {
         ZStack {
-            Capsule().fill(Tokens.ink.opacity(0.92))
+            Capsule().fill(Tokens.ink.opacity(0.92)).shadow(color: .black.opacity(0.28), radius: 5, y: 2)
             Capsule().strokeBorder(session.mode == .commandMode && (isRecording || isProcessing) ? Tokens.lilac : Tokens.barBorder, lineWidth: session.mode == .commandMode && (isRecording || isProcessing) ? 1.5 : 1)
             HStack(spacing: 8) {
                 if isRecording || isProcessing {
@@ -54,6 +54,8 @@ struct FlowBarView: View {
                 }
                 if isProcessing {
                     BreathingDots().frame(width: 40, height: 20)
+                } else if isRecording && session.micConnecting {
+                    Text("Connecting mic…").font(Fonts.ui(11, weight: .medium)).foregroundStyle(Tokens.grey).lineLimit(1)
                 } else if isError, case .error(let msg) = session.state, msg != "no audio" {
                     Text(msg).font(Fonts.ui(11, weight: .medium)).foregroundStyle(Tokens.orange).lineLimit(1).frame(minWidth: 60)
                 } else {
@@ -88,10 +90,8 @@ struct FlowBarView: View {
         .animation(.spring(response: 0.18, dampingFraction: 0.85), value: isProcessing)
     }
 
-    private var currentMic: String {
-        if let uid = Preferences.shared.preferredMicrophoneUID, let d = AudioDevices.device(withUID: uid) { return d.name }
-        return AudioDevices.inputDevices().first?.name ?? "Default"
-    }
+    /// From the device cache: this is evaluated on every render and must not query the HAL.
+    private var currentMic: String { AudioDeviceCache.shared.currentChoice()?.device.name ?? "Default" }
 
     private func circleButton<C: View>(fill: Color, @ViewBuilder content: () -> C) -> some View {
         ZStack { Circle().fill(fill); content() }.frame(width: 22, height: 22).contentShape(Circle())
@@ -118,5 +118,18 @@ struct FlowBarView: View {
     private func flashSuccess() {
         flash = true
         Task { @MainActor in try? await Task.sleep(for: .milliseconds(120)); flash = false }
+    }
+}
+
+/// Fixed-size Flow Bar canvas: content bottom-centered, its rect reported for click-through and toast placement.
+struct FlowBarCanvas<Content: View>: View {
+    var bottomInset: CGFloat
+    var onContentRect: (CGRect) -> Void
+    @ViewBuilder var content: Content
+    var body: some View {
+        content
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { onContentRect($0) }
+            .padding(.bottom, bottomInset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 }

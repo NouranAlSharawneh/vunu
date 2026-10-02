@@ -35,6 +35,13 @@ final class SnapshotRenderTests: XCTestCase {
             HubState.shared.page = page
             windowShot(HubRootView(), size: NSSize(width: 1040, height: 700), "\(dir)/\(name).png")
         }
+        // Every Settings section, to check that row controls share one right edge.
+        HubState.shared.page = .settings
+        for section in SettingsSection.allCases {
+            HubState.shared.settingsSection = section
+            windowShot(HubRootView(), size: NSSize(width: 1040, height: 900), "\(dir)/settings-\(section.rawValue).png")
+        }
+        HubState.shared.settingsSection = .general
         try? Database.shared.deleteDictionary(ids: (try? Database.shared.dictionary())?.filter { ["Supabase", "Nunu"].contains($0.word) }.compactMap(\.id) ?? [])
     }
 
