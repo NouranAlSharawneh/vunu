@@ -128,6 +128,9 @@ struct MicrophonePicker: View {
 struct LevelBar: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30)) { _ in
+            // The meter's mic is a lease renewed by its own frames: a hidden Settings window stops drawing, the lease lapses
+            // within 2 s and the mic turns off (the Hub window is never released, so onDisappear can't be relied on).
+            let _ = SessionCoordinator.shared.audio.renewMonitoringLease()
             let l = CGFloat(SessionCoordinator.shared.audio.level)
             GeometryReader { g in
                 ZStack(alignment: .leading) {

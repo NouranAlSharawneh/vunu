@@ -54,6 +54,8 @@ struct FlowBarView: View {
                 }
                 if isProcessing {
                     BreathingDots().frame(width: 40, height: 20)
+                } else if isRecording && session.micConnecting {
+                    Text("Connecting mic…").font(Fonts.ui(11, weight: .medium)).foregroundStyle(Tokens.grey).lineLimit(1)
                 } else if isError, case .error(let msg) = session.state, msg != "no audio" {
                     Text(msg).font(Fonts.ui(11, weight: .medium)).foregroundStyle(Tokens.orange).lineLimit(1).frame(minWidth: 60)
                 } else {

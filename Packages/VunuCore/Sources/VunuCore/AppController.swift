@@ -20,7 +20,7 @@ public final class AppController {
         observeSystem()
 
         let session = SessionCoordinator.shared
-        if Permissions.microphoneGranted { session.warmAudio(); session.applyMicrophonePreference() }
+        if Permissions.microphoneGranted { session.applyMicrophonePreference() }
         if Permissions.accessibilityGranted {
             do { try session.startHotkeys() } catch { Log.hotkeys.error("tap start failed: \(error)"); Log.file("hotkeys", "tap start failed: \(error)") }
         }
@@ -30,6 +30,7 @@ public final class AppController {
         } else {
             Task { await ModelManager.shared.loadSelected() }
         }
+        if arguments.contains("--audio-probe") { Task { try? await Task.sleep(for: .seconds(2)); await session.audio.probe() } }
         if arguments.contains("--benchmark") { Task { try? await Task.sleep(for: .seconds(3)); await runBenchmarkToLog() } }
         if arguments.contains("--hub") { HubWindowController.shared.show() }
         AudioStore.collectGarbage(retention: Preferences.shared.audioRetention)
@@ -38,7 +39,7 @@ public final class AppController {
 
     private func afterOnboarding() {
         let s = SessionCoordinator.shared
-        if Permissions.microphoneGranted { s.warmAudio(); s.applyMicrophonePreference() }
+        if Permissions.microphoneGranted { s.applyMicrophonePreference() }
         if Permissions.accessibilityGranted { try? s.startHotkeys() }
         Task { await ModelManager.shared.loadSelected() }
         HubWindowController.shared.show(page: .home)
@@ -58,6 +59,9 @@ public final class AppController {
 
     private func observeSystem() {
         let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(forName: NSWorkspace.willSleepNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { SessionCoordinator.shared.systemWillSleep() }
+        }
         nc.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             Task { @MainActor in try? await Task.sleep(for: .seconds(2)); SessionCoordinator.shared.restartHotkeys(); Log.file("hotkeys", "tap restarted after wake") }
         }

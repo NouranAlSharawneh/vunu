@@ -1,326 +1,168 @@
 import Foundation
-@preconcurrency import AVFoundation
-import CoreAudio
 import os
-import VunuObjC
 
-/// Always-warm microphone capture. Keeps an AVAudioEngine running (no voice processing → no ducking),
-/// converts the hardware stream to 16 kHz mono Float32 once, and accumulates samples only while recording.
-/// Level (RMS) is updated on every buffer for the waveform; no timers.
+/// Identifies one dictation's capture. Events carry it so a late event from an earlier dictation can be ignored.
+public typealias CaptureToken = UInt64
+
+public enum CaptureEvent: Sendable, Equatable {
+    /// The mic is running for this dictation.
+    case started(device: String, bluetooth: Bool)
+    /// First real (non-silent) audio arrived. Bluetooth mics take 1–3 s to switch profiles before this.
+    case micReady
+    /// The device changed format mid-dictation; capture restarted on the same mic and the recording continues.
+    case formatChanged
+    /// The mic went away (unplugged, headset taken by another device, audio service restart). Audio so far is kept.
+    case deviceLost(String)
+    /// The mic couldn't be started (or the audio system stopped responding).
+    case startFailed(String)
+    /// The mic never delivered any audio.
+    case noInput
+    /// The mic delivers only digital silence (a busy multipoint headset, or the internal mic with the lid closed).
+    case silentInput(device: String, lidClosed: Bool)
+}
+
+/// The capture backend contract shared by the Core Audio engine and the legacy AVAudioEngine fallback.
+protocol CaptureEngine: AnyObject, Sendable {
+    func setEventHandler(_ handler: @escaping @Sendable (CaptureToken, CaptureEvent) -> Void)
+    var level: Float { get }
+    var peak: Float { get }
+    var isRecording: Bool { get }
+    var isRunning: Bool { get }
+    var recordedSampleCount: Int { get }
+    var firstSampleLatencyMs: Double { get }
+    func beginRecording(gain: Float) -> CaptureToken
+    func endRecording() -> [Float]
+    func snapshotSamples() -> [Float]
+    func renewMonitoringLease()
+    func endMonitoring()
+    func releaseIfIdle()
+    func selectDevice(uid: String?, modelUID: String?)
+    func shutdown()
+}
+
+/// Microphone capture: 16 kHz mono Float32, accumulated only while recording; level metering for the waveform and the
+/// Settings meter. The mic is opened on key-down and released shortly after each dictation, so the mic indicator is off
+/// while idle and a Bluetooth headset is never held in call mode.
+///
+/// Backed by `HALCaptureEngine` (input-only Core Audio unit bound to the chosen device). The ≤ 0.3.x AVAudioEngine path
+/// stays available for one release: `defaults write dev.nunu.vunu captureEngine legacy`.
 public final class AudioCapture: @unchecked Sendable {
     public static let sampleRate: Double = 16_000
 
-    /// Replaced (not reused) after a configuration change: a stale engine reports the old hardware format and
-    /// installTap then raises an Objective-C exception (e.g. AirPods flipping to HFP when the mic opens).
-    private var engine = AVAudioEngine()
-    private var converter: AVAudioConverter?
-    private var targetFormat: AVAudioFormat!
-    private var tapFormat: AVAudioFormat?
-    private var deviceUID: String?
-    private var currentDeviceID: AudioDeviceID?
-    private var configWork: DispatchWorkItem?
-    private let state = OSAllocatedUnfairLock(initialState: State())
-    private var configObserver: NSObjectProtocol?
-    private var idleTimer: DispatchWorkItem?
-    private let queue = DispatchQueue(label: "dev.nunu.vunu.audio", qos: .userInitiated)
-    public var onDeviceChanged: (@Sendable (DeviceChange) -> Void)?
+    public enum Backend: String, Sendable { case hal, legacy }
+    public static var configuredBackend: Backend {
+        UserDefaults.standard.string(forKey: "captureEngine").flatMap(Backend.init(rawValue:)) ?? .hal
+    }
+    /// Tests and offscreen renders must never open the mic (VUNU_MIC_TESTS=1 opts a hardware test in).
+    static let isTesting = NSClassFromString("XCTestCase") != nil && ProcessInfo.processInfo.environment["VUNU_MIC_TESTS"] == nil
 
-    public enum DeviceChange: Sendable {
-        case formatChanged   // same device, engine restarted; recording continues
-        case deviceLost      // the input device went away or the engine could not restart
+    public let backend: Backend
+    private let engine: CaptureEngine
+
+    public init(backend: Backend = AudioCapture.configuredBackend) {
+        self.backend = backend
+        engine = backend == .legacy ? LegacyCaptureEngine() : HALCaptureEngine()
     }
 
-    private struct State {
-        var recording = false
-        var samples: [Float] = []
-        var level: Float = 0          // smoothed RMS 0…1
-        var peak: Float = 0
-        var startedAt: TimeInterval = 0
-        var discardUntil: TimeInterval = 0
-        var firstSampleAt: TimeInterval = 0
-        var engineRunning = false
-        var gain: Float = 1
-        var monitoring = 0
-    }
+    /// Events arrive on an internal queue; hop to the main actor before touching UI state.
+    public func setEventHandler(_ handler: @escaping @Sendable (CaptureToken, CaptureEvent) -> Void) { engine.setEventHandler(handler) }
 
-    public init() {
-        targetFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Self.sampleRate, channels: 1, interleaved: false)
-    }
-
-    public var isEngineRunning: Bool { state.withLock { $0.engineRunning } }
-    public var isRecording: Bool { state.withLock { $0.recording } }
+    public var isEngineRunning: Bool { engine.isRunning }
+    public var isRecording: Bool { engine.isRecording }
     /// 0…1 smoothed input level, for the waveform / mic test.
-    public var level: Float { debugLevelOverride ?? state.withLock { $0.level } }
+    public var level: Float { debugLevelOverride ?? engine.level }
     /// Test/preview hook so the waveform can be rendered offscreen with a fake level.
     public nonisolated(unsafe) var debugLevelOverride: Float? = nil
-    public var peak: Float { state.withLock { $0.peak } }
-    public var recordedDuration: TimeInterval { state.withLock { Double($0.samples.count) / Self.sampleRate } }
-    public var recordedSampleCount: Int { state.withLock { $0.samples.count } }
-
-    // MARK: engine lifecycle
-
-    /// Select the input device by UID (nil = automatic). Restarts the engine if running.
-    public func selectDevice(uid: String?) {
-        queue.sync {
-            deviceUID = uid
-            let wasRunning = engine.isRunning
-            teardownLocked()
-            if wasRunning {
-                do { try startLocked() } catch { Log.audio.error("restart after device select failed: \(error)") }
-            }
-        }
-    }
-
-    private func resolveDeviceID() -> AudioDeviceID? {
-        if let deviceUID, let dev = AudioDevices.device(withUID: deviceUID) { return dev.id }
-        return AudioDevices.automaticInputDeviceID()
-    }
-
-    private func applyDevice(_ id: AudioDeviceID) {
-        guard let unit = engine.inputNode.audioUnit else { return }
-        var deviceID = id
-        let st = AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &deviceID, UInt32(MemoryLayout<AudioDeviceID>.size))
-        if st != noErr { Log.audio.error("failed to set input device \(id): \(st)") }
-    }
-
-    /// Start (or ensure) the engine. ~30 ms cold; instant when already running.
-    public func start() throws {
-        try queue.sync { try startLocked() }
-    }
-
-    private func startLocked() throws {
-        if engine.isRunning { return }
-        if let id = resolveDeviceID(), id != currentDeviceID {
-            if currentDeviceID != nil { teardownLocked() }
-            applyDevice(id)
-            currentDeviceID = id
-        }
-        let input = engine.inputNode
-        // NEVER: input.setVoiceProcessingEnabled(true) — it ducks other apps' audio on macOS.
-        // After a route change the hardware format can lag behind; installTap asserts they match.
-        var hw = input.outputFormat(forBus: 0)
-        for _ in 0..<5 where !Self.formatsAgree(input) {
-            usleep(100_000)
-            hw = input.outputFormat(forBus: 0)
-        }
-        guard Self.formatsAgree(input) else {
-            // Read the input node before teardown: teardownLocked() frees the engine that owns it.
-            let reason = "input format not ready (\(hw.sampleRate) Hz vs \(input.inputFormat(forBus: 0).sampleRate) Hz)"
-            teardownLocked()
-            Log.file("audio", reason)
-            throw VunuError.engineUnavailable(reason)
-        }
-        if converter == nil || converter?.inputFormat != hw {
-            converter = AVAudioConverter(from: hw, to: targetFormat)
-            converter?.sampleRateConverterQuality = .max
-        }
-        input.removeTap(onBus: 0)
-        let ratio = Self.sampleRate / hw.sampleRate
-        let engine = engine
-        var startError: Error?
-        let exception = VNTryCatch {
-            input.installTap(onBus: 0, bufferSize: 2048, format: hw) { [weak self] buffer, _ in
-                self?.process(buffer, ratio: ratio)
-            }
-            engine.prepare()
-            do { try engine.start() } catch { startError = error }
-        }
-        if let exception {
-            Log.file("audio", "engine start raised: \(exception.localizedDescription)")
-            teardownLocked()
-            throw VunuError.engineUnavailable(exception.localizedDescription)
-        }
-        if let startError {
-            input.removeTap(onBus: 0)
-            throw startError
-        }
-        tapFormat = hw
-        let now = ProcessInfo.processInfo.systemUptime
-        state.withLock { $0.engineRunning = true; $0.discardUntil = now + 0.04 }
-        if configObserver == nil {
-            configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
-                self?.handleConfigChange()
-            }
-        }
-        Log.audio.info("audio engine started (\(hw.sampleRate) Hz, \(hw.channelCount) ch)")
-        Log.file("audio", "mic start: \(AudioDevices.describe(currentDeviceID)) \(Int(hw.sampleRate)) Hz \(hw.channelCount) ch (\(deviceUID == nil ? "auto" : "explicit")); default in \(AudioDevices.describe(AudioDevices.defaultInputDeviceID())), out \(AudioDevices.describe(AudioDevices.defaultOutputDeviceID()))")
-        scheduleIdleStop()
-    }
-
-    private static func formatsAgree(_ input: AVAudioInputNode) -> Bool {
-        let out = input.outputFormat(forBus: 0), hwIn = input.inputFormat(forBus: 0)
-        return out.sampleRate > 0 && out.channelCount > 0 && out.sampleRate == hwIn.sampleRate
-    }
-
-    private static func hardwareMatches(_ input: AVAudioInputNode, _ format: AVAudioFormat) -> Bool {
-        let hwIn = input.inputFormat(forBus: 0)
-        return hwIn.sampleRate == format.sampleRate && hwIn.channelCount == format.channelCount
-    }
-
-    public func stop() {
-        if Thread.isMainThread { queue.async { [self] in stopLocked() } } else { queue.sync { stopLocked() } }
-    }
-    private func stopLocked() {
-        idleTimer?.cancel(); idleTimer = nil
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        state.withLock { $0.engineRunning = false; $0.level = 0 }
-        Log.audio.info("audio engine stopped")
-    }
-
-    /// Stop and discard the engine so the next start builds a fresh one against the current hardware. Keeps recorded samples.
-    private func teardownLocked() {
-        stopLocked()
-        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
-        configObserver = nil
-        engine = AVAudioEngine()
-        converter = nil
-        tapFormat = nil
-        currentDeviceID = nil
-    }
-
-    /// Route changes arrive in bursts (AirPods fire several while switching profiles); act once they settle.
-    private func handleConfigChange() {
-        queue.async { [self] in
-            configWork?.cancel()
-            let work = DispatchWorkItem { [weak self] in self?.applyConfigChangeLocked() }
-            configWork = work
-            queue.asyncAfter(deadline: .now() + 0.2, execute: work)
-        }
-    }
-
-    private func applyConfigChangeLocked() {
-        configWork = nil
-        let (recording, monitoring) = state.withLock { ($0.recording, $0.monitoring > 0) }
-        let lost = currentDeviceID.map { !AudioDevices.deviceExists($0) } ?? false
-        guard recording || monitoring else {
-            teardownLocked()
-            Log.file("audio", "configuration changed while idle; engine released")
-            return
-        }
-        // Assigning the input device on a fresh engine posts a configuration change of its own once it starts (macOS 27).
-        // Rebuilding the engine for it assigns the device again and loops forever with no audio, so keep the same engine
-        // when the device and its format are unchanged; only rebuild for a real route change.
-        if !lost, let tapFormat, Self.hardwareMatches(engine.inputNode, tapFormat) {
-            if engine.isRunning { return }
-            do {
-                try startLocked()
-                Log.file("audio", "configuration changed; same engine restarted")
-                return
-            } catch {
-                Log.file("audio", "same-engine restart failed, rebuilding: \(error)")
-            }
-        }
-        teardownLocked()
-        do {
-            try startLocked()
-            Log.file("audio", "configuration changed\(lost ? " (device lost)" : ""); engine restarted")
-            if recording { onDeviceChanged?(lost ? .deviceLost : .formatChanged) }
-        } catch {
-            Log.file("audio", "restart after configuration change failed: \(error)")
-            if recording { onDeviceChanged?(.deviceLost) }
-        }
-    }
-
-    /// Stop the engine after 10 min of no recording to save power; restarted on the next key-down.
-    private func scheduleIdleStop() {
-        idleTimer?.cancel()
-        // Runs on `queue`: call stopLocked() directly (stop() would queue.sync onto the queue it is already on).
-        let item = DispatchWorkItem { [weak self] in
-            guard let self, !self.isRecording, self.state.withLock({ $0.monitoring == 0 }) else { return }
-            self.stopLocked()
-        }
-        idleTimer = item
-        queue.asyncAfter(deadline: .now() + 600, execute: item)
-    }
-
-    // MARK: recording
-
-    /// Begin accumulating samples. Starts the engine if it was idle-stopped.
-    public func beginRecording(gain: Float = 1) throws {
-        if !isEngineRunning { try start() }
-        idleTimer?.cancel()
-        state.withLock {
-            $0.samples.removeAll(keepingCapacity: true)
-            $0.samples.reserveCapacity(Int(Self.sampleRate) * 30)
-            $0.recording = true
-            $0.startedAt = ProcessInfo.processInfo.systemUptime
-            $0.firstSampleAt = 0
-            $0.gain = gain
-            $0.level = 0; $0.peak = 0
-        }
-    }
-
-    /// Stop accumulating and return the 16 kHz mono samples.
-    public func endRecording() -> [Float] {
-        let samples = state.withLock { s -> [Float] in
-            s.recording = false
-            let out = s.samples
-            s.samples = []
-            s.level = 0
-            return out
-        }
-        scheduleIdleStop()
-        return samples
-    }
-
-    /// Level metering without recording (mic test UI). Reference-counted.
-    public func startMonitoring() { if !isEngineRunning { try? start() }; state.withLock { $0.monitoring += 1 } }
-    public func stopMonitoring() {
-        let stopEngine = state.withLock { s -> Bool in
-            s.monitoring = max(0, s.monitoring - 1)
-            if s.monitoring == 0 && !s.recording { s.level = 0; return true }
-            return false
-        }
-        if stopEngine { stop() }
-    }
-
-    /// Stop the engine unless something (recording / level monitoring) still needs it. Keeps the mic-in-use indicator off while idle.
-    public func releaseIfIdle() {
-        let busy = state.withLock { $0.recording || $0.monitoring > 0 }
-        if !busy && isEngineRunning { stop() }
-    }
-
-    /// Samples captured so far (used for "Microphone disconnected — Insert").
-    public func snapshotSamples() -> [Float] { state.withLock { $0.samples } }
-
+    public var peak: Float { engine.peak }
+    public var recordedSampleCount: Int { engine.recordedSampleCount }
+    public var recordedDuration: TimeInterval { Double(engine.recordedSampleCount) / Self.sampleRate }
     /// Latency from beginRecording() to the first captured sample, ms (for the HUD).
-    public var firstSampleLatencyMs: Double {
-        state.withLock { $0.firstSampleAt > 0 ? ($0.firstSampleAt - $0.startedAt) * 1000 : 0 }
+    public var firstSampleLatencyMs: Double { engine.firstSampleLatencyMs }
+
+    /// Starts accumulating samples and opens the mic if needed. Returns immediately; problems arrive as events.
+    @discardableResult public func beginRecording(gain: Float = 1) -> CaptureToken { engine.beginRecording(gain: gain) }
+    /// Stops accumulating and returns the 16 kHz mono samples.
+    public func endRecording() -> [Float] { engine.endRecording() }
+    /// Samples captured so far (live preview, "Microphone disconnected — Insert").
+    public func snapshotSamples() -> [Float] { engine.snapshotSamples() }
+
+    /// Level metering without recording (Settings mic meter). A lease: call at least once a second while the meter is
+    /// visible; it lapses 2 s after the last call, so a hidden window can't keep the mic on.
+    public func renewMonitoringLease() { engine.renewMonitoringLease() }
+    public func startMonitoring() { engine.renewMonitoringLease() }
+    public func stopMonitoring() { engine.endMonitoring() }
+
+    /// Release the mic shortly unless a recording or the meter still needs it.
+    public func releaseIfIdle() { engine.releaseIfIdle() }
+
+    /// Select the input device by UID (nil = automatic). Takes effect for the next capture; an idle meter switches now.
+    public func selectDevice(uid: String?, modelUID: String? = nil) { engine.selectDevice(uid: uid, modelUID: modelUID) }
+
+    /// App quit. Doesn't block: process exit releases the device anyway.
+    public func stop() { engine.shutdown() }
+
+    /// `--audio-probe`: repeated start/stop cycles with timings in vunu.log, to validate capture on a given Mac/headset.
+    public func probe(cycles: Int = 20) async {
+        Log.file("audio", "probe: \(cycles) cycles on the \(backend.rawValue) engine")
+        for i in 1...cycles {
+            beginRecording()
+            try? await Task.sleep(for: .milliseconds(1_500))
+            let latency = firstSampleLatencyMs
+            let samples = endRecording()
+            var peak: Float = 0
+            for v in samples { peak = max(peak, abs(v)) }
+            Log.file("audio", "probe \(i): \(samples.count) samples (\(String(format: "%.2f", Double(samples.count) / Self.sampleRate)) s), first sample \(Int(latency)) ms, peak \(String(format: "%.4f", peak))")
+            releaseIfIdle()
+            try? await Task.sleep(for: .milliseconds(900))
+        }
+        Log.file("audio", "probe done")
+    }
+}
+
+/// Adapts the legacy AVAudioEngine capture to the event/token contract.
+final class LegacyCaptureEngine: CaptureEngine, @unchecked Sendable {
+    private let impl = LegacyAudioCapture()
+    private let state = OSAllocatedUnfairLock<(token: CaptureToken, handler: (@Sendable (CaptureToken, CaptureEvent) -> Void)?, monitoring: Bool)>(initialState: (0, nil, false))
+
+    init() {
+        impl.onDeviceChanged = { [weak self] change in
+            guard let self else { return }
+            let (token, handler) = self.state.withLock { ($0.token, $0.handler) }
+            handler?(token, change == .deviceLost ? .deviceLost("device lost") : .formatChanged)
+        }
     }
 
-    private func process(_ buffer: AVAudioPCMBuffer, ratio: Double) {
-        let now = ProcessInfo.processInfo.systemUptime
-        let (recording, discard, gain, monitoring) = state.withLock { ($0.recording, now < $0.discardUntil, $0.gain, $0.monitoring > 0) }
-        guard recording || monitoring, !discard, let converter else { return }
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 16
-        guard let out = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else { return }
-        var consumed = false
-        var error: NSError?
-        let status = converter.convert(to: out, error: &error) { _, outStatus in
-            if consumed { outStatus.pointee = .noDataNow; return nil }
-            consumed = true; outStatus.pointee = .haveData; return buffer
+    func setEventHandler(_ handler: @escaping @Sendable (CaptureToken, CaptureEvent) -> Void) { state.withLock { $0.handler = handler } }
+    var level: Float { impl.level }
+    var peak: Float { impl.peak }
+    var isRecording: Bool { impl.isRecording }
+    var isRunning: Bool { impl.isEngineRunning }
+    var recordedSampleCount: Int { impl.recordedSampleCount }
+    var firstSampleLatencyMs: Double { impl.firstSampleLatencyMs }
+
+    func beginRecording(gain: Float) -> CaptureToken {
+        let (token, handler) = state.withLock { s -> (CaptureToken, (@Sendable (CaptureToken, CaptureEvent) -> Void)?) in s.token += 1; return (s.token, s.handler) }
+        if AudioCapture.isTesting { return token }
+        do {
+            try impl.beginRecording(gain: gain)
+            handler?(token, .started(device: "", bluetooth: false))
+            handler?(token, .micReady)
+        } catch {
+            handler?(token, .startFailed(error.localizedDescription))
         }
-        guard status != .error, let ch = out.floatChannelData else { return }
-        let n = Int(out.frameLength)
-        guard n > 0 else { return }
-        let ptr = ch[0]
-        var sum: Float = 0, pk: Float = 0
-        if gain != 1 { for i in 0..<n { ptr[i] = max(-1, min(1, ptr[i] * gain)) } }
-        for i in 0..<n { let v = ptr[i]; sum += v * v; pk = max(pk, abs(v)) }
-        let rms = sqrt(sum / Float(n))
-        // map RMS (~0.005 quiet … 0.3 loud) to 0…1 with a soft log curve
-        let mapped = min(1, max(0, (log10(max(rms, 1e-5)) + 4) / 3.2))
-        let chunk = Array(UnsafeBufferPointer(start: ptr, count: n))
-        let peakValue = pk
-        state.withLock { s in
-            if s.recording {
-                if s.firstSampleAt == 0 { s.firstSampleAt = now }
-                s.samples.append(contentsOf: chunk)
-            }
-            // attack 30 ms / release 120 ms at ~43 ms buffers → fast attack, slower release
-            s.level = mapped > s.level ? mapped : s.level * 0.55 + mapped * 0.45
-            s.peak = max(s.peak * 0.9, peakValue)
-        }
+        return token
     }
+    func endRecording() -> [Float] { impl.endRecording() }
+    func snapshotSamples() -> [Float] { impl.snapshotSamples() }
+    // The legacy engine counts monitor references; map the lease onto a single reference.
+    func renewMonitoringLease() {
+        guard !AudioCapture.isTesting, state.withLock({ s -> Bool in defer { s.monitoring = true }; return !s.monitoring }) else { return }
+        impl.startMonitoring()
+    }
+    func endMonitoring() {
+        if state.withLock({ s -> Bool in defer { s.monitoring = false }; return s.monitoring }) { impl.stopMonitoring() }
+    }
+    func releaseIfIdle() { impl.releaseIfIdle() }
+    func selectDevice(uid: String?, modelUID: String?) { impl.selectDevice(uid: uid) }
+    func shutdown() { impl.stop() }
 }
