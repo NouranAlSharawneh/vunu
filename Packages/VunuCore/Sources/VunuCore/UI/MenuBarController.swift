@@ -182,7 +182,7 @@ enum MenuBuilders {
         let auto = NSMenuItem(title: "System default", action: #selector(MicMenuTarget.pick(_:)), keyEquivalent: "")
         auto.target = MicMenuTarget.shared; auto.representedObject = ""; auto.state = current == nil ? .on : .off
         m.addItem(auto)
-        for d in AudioDevices.inputDevices() {
+        for d in AudioDeviceCache.shared.inputDevices() {
             let it = NSMenuItem(title: d.displayName + (d.isBluetooth ? " ⚠︎" : ""), action: #selector(MicMenuTarget.pick(_:)), keyEquivalent: "")
             it.target = MicMenuTarget.shared; it.representedObject = d.uid; it.state = current == d.uid ? .on : .off
             m.addItem(it)

@@ -68,7 +68,9 @@ public final class SessionCoordinator {
     }
 
     public func applyMicrophonePreference() {
-        audio.selectDevice(uid: Preferences.shared.preferredMicrophoneUID)
+        let prefs = Preferences.shared
+        prefs.preferredMicrophoneModelUID = prefs.preferredMicrophoneUID.flatMap { AudioDeviceCache.shared.device(withUID: $0)?.modelUID }
+        audio.selectDevice(uid: prefs.preferredMicrophoneUID)
     }
 
     // MARK: hotkey events

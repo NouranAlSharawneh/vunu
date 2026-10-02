@@ -121,10 +121,9 @@ struct MicrophonePicker: View {
             if let new = devices.first(where: { !before.contains($0.uid) && $0.uid != prefs.preferredMicrophoneUID }) { detected = new }
         }
     }
-    private func reload() { devices = AudioDevices.inputDevices(includeVirtual: showOthers) }
+    private func reload() { devices = AudioDeviceCache.shared.inputDevices(includeVirtual: showOthers) }
 }
 
-extension Notification.Name { static let vunuAudioDevicesChanged = Notification.Name("vunuAudioDevicesChanged") }
 
 struct LevelBar: View {
     var body: some View {

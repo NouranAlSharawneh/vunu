@@ -6,7 +6,6 @@ import CoreAudio
 @MainActor
 public final class AppController {
     public static let shared = AppController()
-    private var deviceListener: AudioObjectPropertyListenerBlock?
     private init() {}
 
     public func launch(arguments: [String]) {
@@ -72,13 +71,8 @@ public final class AppController {
                 SessionCoordinator.shared.tap?.reenable()
             }
         }
-        // audio device list changes → notify pickers
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        let block: AudioObjectPropertyListenerBlock = { _, _ in
-            Task { @MainActor in NotificationCenter.default.post(name: .vunuAudioDevicesChanged, object: nil) }
-        }
-        deviceListener = block
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main, block)
+        // audio device list changes → refresh the cache off main, which then notifies pickers
+        AudioDeviceCache.shared.start()
     }
 
     private func runBenchmarkToLog() async {

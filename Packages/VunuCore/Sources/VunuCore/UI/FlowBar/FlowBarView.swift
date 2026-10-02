@@ -88,10 +88,8 @@ struct FlowBarView: View {
         .animation(.spring(response: 0.18, dampingFraction: 0.85), value: isProcessing)
     }
 
-    private var currentMic: String {
-        if let uid = Preferences.shared.preferredMicrophoneUID, let d = AudioDevices.device(withUID: uid) { return d.name }
-        return AudioDevices.inputDevices().first?.name ?? "Default"
-    }
+    /// From the device cache: this is evaluated on every render and must not query the HAL.
+    private var currentMic: String { AudioDeviceCache.shared.currentChoice()?.device.name ?? "Default" }
 
     private func circleButton<C: View>(fill: Color, @ViewBuilder content: () -> C) -> some View {
         ZStack { Circle().fill(fill); content() }.frame(width: 22, height: 22).contentShape(Circle())
