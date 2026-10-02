@@ -80,7 +80,7 @@ struct GeneralSettings: View {
             MicrophonePicker()
             LanguagesPicker()
             SettingRow(title: "Auto Cleanup", subtitle: "How much the on-device model tidies your words. Rules always run.") {
-                Picker("", selection: $prefs.cleanupLevel) { ForEach(CleanupLevel.allCases) { Text($0.title).tag($0) } }.frame(width: 130)
+                Picker("", selection: $prefs.cleanupLevel) { ForEach(CleanupLevel.allCases) { Text($0.title).tag($0) } }.labelsHidden().fixedSize()
             }
             SettingRow(title: "App language", subtitle: "Interface language follows macOS") { Text(Locale.current.localizedString(forLanguageCode: Locale.current.language.languageCode?.identifier ?? "en") ?? "English").font(Fonts.ui(12)).foregroundStyle(HubColors.secondaryText) }
         }
@@ -98,7 +98,7 @@ struct MicrophonePicker: View {
                 Picker("", selection: Binding(get: { prefs.preferredMicrophoneUID ?? "" }, set: { prefs.preferredMicrophoneUID = $0.isEmpty ? nil : $0; SessionCoordinator.shared.applyMicrophonePreference() })) {
                     Text("System default").tag("")
                     ForEach(devices) { d in Text(d.displayName + (d.isBluetooth ? " ⚠︎" : "")).tag(d.uid) }
-                }.frame(width: 260)
+                }.labelsHidden().frame(maxWidth: 260, alignment: .trailing)
             }
             HStack(spacing: 10) {
                 LevelBar().frame(width: 220, height: 8)
@@ -157,7 +157,7 @@ struct LanguagesPicker: View {
                         } label: { HStack { if prefs.languages.contains(code) { Image(systemName: "checkmark") }; Text(LanguageCatalog.name(code)) } }
                     }
                 } label: { Text(prefs.languages.map(LanguageCatalog.name).joined(separator: ", ")).font(Fonts.ui(12)).lineLimit(1) }
-                .frame(width: 260)
+                .frame(maxWidth: 260, alignment: .trailing)
                 if prefs.languages.contains(where: { LanguageCatalog.engines(for: $0) == [.whisperKit] }) {
                     Text("Arabic and some languages need the Whisper engine (Settings → Models).").font(Fonts.ui(11)).foregroundStyle(Tokens.orange)
                 }
@@ -183,7 +183,7 @@ struct SystemSettings: View {
             SettingRow(title: "Mute music while dictating", subtitle: "Off by default. Mutes the output device and restores the exact volume after.") { Toggle("", isOn: $prefs.muteMusicWhileDictating).toggleStyle(.switch) }
             SettingRow(title: "Hide Flow Bar from screen shares") { Toggle("", isOn: $prefs.hideFlowBarFromScreenShare).toggleStyle(.switch).onChange(of: prefs.hideFlowBarFromScreenShare) { _, _ in FlowBarController.shared.applySharingType() } }
             SettingRow(title: "Hands-free auto-stop", subtitle: "Stop after this much silence (0 = never)") {
-                Picker("", selection: $prefs.handsFreeSilenceStopSeconds) { Text("Never").tag(0.0); Text("5 s").tag(5.0); Text("8 s").tag(8.0); Text("15 s").tag(15.0) }.frame(width: 100)
+                Picker("", selection: $prefs.handsFreeSilenceStopSeconds) { Text("Never").tag(0.0); Text("5 s").tag(5.0); Text("8 s").tag(8.0); Text("15 s").tag(15.0) }.labelsHidden().fixedSize()
             }
             UpdateSettings()
             Text("Notifications").font(Fonts.ui(13, weight: .semibold)).foregroundStyle(HubColors.text).padding(.top, 12)
@@ -266,7 +266,7 @@ struct ModelsSettings: View {
             if let e = models.lastError { Text(e).font(Fonts.ui(11)).foregroundStyle(Tokens.orange) }
             Text("Formatting").font(Fonts.ui(13, weight: .semibold)).foregroundStyle(HubColors.text).padding(.top, 12)
             SettingRow(title: "Formatting model", subtitle: "Apple Intelligence: \(models.fmAvailability)") {
-                Picker("", selection: $prefs.formatter) { ForEach(FormatterKind.allCases) { Text($0.title).tag($0) } }.frame(width: 260).onChange(of: prefs.formatter) { _, v in if v == .mlx { prefs.formatter = .appleIntelligence } }
+                Picker("", selection: $prefs.formatter) { ForEach(FormatterKind.allCases) { Text($0.title).tag($0) } }.labelsHidden().fixedSize().onChange(of: prefs.formatter) { _, v in if v == .mlx { prefs.formatter = .appleIntelligence } }
             }
             SettingRow(title: "Keep models loaded in memory", subtitle: "Faster first dictation; ~\(Int(models.residentMemoryMB)) MB resident now") { Toggle("", isOn: $prefs.keepModelsLoaded).toggleStyle(.switch) }
             SettingRow(title: "Benchmark", subtitle: bench.map { "ASR \(Int($0.asrMs)) ms · rules \(String(format: "%.1f", $0.rulesMs)) ms · LLM \(Int($0.llmMs)) ms\($0.llmRejected.map { " (\($0))" } ?? "") for \(String(format: "%.1f", $0.audioSeconds)) s audio" } ?? "Measures ASR + formatting latency on a sample clip") {
@@ -352,7 +352,7 @@ struct AccountSettings: View {
             Text("Data & Privacy").font(Fonts.ui(13, weight: .semibold)).foregroundStyle(HubColors.text).padding(.top, 12)
             SettingRow(title: "Context awareness", subtitle: "Read text around the caret to fix spacing and capitalization (never in password fields)") { Toggle("", isOn: $prefs.contextAwareness).toggleStyle(.switch) }
             SettingRow(title: "Audio storage", subtitle: "Recordings enable Play / Retry in History") {
-                Picker("", selection: $prefs.audioRetention) { ForEach(AudioRetention.allCases) { Text($0.title).tag($0) } }.frame(width: 220)
+                Picker("", selection: $prefs.audioRetention) { ForEach(AudioRetention.allCases) { Text($0.title).tag($0) } }.labelsHidden().fixedSize()
             }
             SettingRow(title: "Open data folder") { Button("Show in Finder") { NSWorkspace.shared.open(Paths.appSupport) }.buttonStyle(SecondaryButtonStyle()) }
         }
