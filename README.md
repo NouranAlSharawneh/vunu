@@ -45,7 +45,7 @@ On older versions (0.2.x and earlier), or if anything goes wrong, rerun the inst
 | Command Mode (edit selected text by voice) | hold `fn`+`⌃` (enable in Settings → Experimental) |
 
 - Recording keeps going while you ⌘-Tab, swipe to another Space, or click into another app; on release, Vunu brings the app you started in back to the front and inserts there.
-- Music never pauses or ducks.
+- Music never pauses or ducks. With Bluetooth headphones, Vunu records from your Mac's microphone (Microphone: Automatic), so the headphones stay in full-quality mode instead of switching to call quality.
 - While recording, the menu bar icon and the floating bar show the icon of the app that will receive the text.
 - Say "period", "comma", "new line", "at sign", "john at gmail dot com", "scratch that", "press enter".
 - **Lists need no keyword.** "Here's the plan, first buy milk, second call mom, third finish the report" becomes an intro line and a numbered list. "number one… number two…" works too. For bullets say "bullet point" before each item: "todo, bullet point eggs, bullet point bread".
@@ -70,7 +70,8 @@ On older versions (0.2.x and earlier), or if anything goes wrong, rerun the inst
 
 - **Speech to text:** NVIDIA Parakeet TDT 0.6B v3 via [FluidAudio](https://github.com/FluidInference/FluidAudio) (CoreML on the Neural Engine); Apple's on-device `SpeechAnalyzer` as an alternative engine.
 - **Formatting:** a deterministic rules pass (spoken punctuation, numbers, emails/URLs, fillers, stutters, lists, self-corrections, developer vocabulary) plus an optional cleanup pass with Apple's on-device Foundation Models, guarded so it can only edit, never answer.
-- **Insertion:** Accessibility fast path for native text views, clipboard paste with restore everywhere else, chunked paste for terminals.
+- **Audio capture:** an input-only Core Audio unit bound to the chosen mic (never the output side, so Bluetooth/multipoint output changes can't disturb it), released after every dictation.
+- **Insertion:** Accessibility fast path for native text views, clipboard paste everywhere else; your clipboard comes back only after the target app has read the dictation (terminals like cmux read it a second or more later).
 - **Storage:** SQLite via GRDB for transcript history. Audio is not stored unless you turn it on in Settings → Account.
 
 ## Build from source
